@@ -364,6 +364,83 @@ function drawRetention(data) {
   return frame
 }
 
+// -------------------------------------------------------- knowledge depth --
+
+/** Per-cluster skill within each subject played, weakest cluster first.
+ *
+ * Every other panel compares *across* subjects; this is the only one that
+ * looks inside one. Skill shares difficulty's 0-10 scale (see
+ * web/api/adaptive.py's UserModel), so the axis is fixed the same way
+ * Retention's is fixed to easiness -- a subject whose worst topic is a 6
+ * should not fill the chart just because 6 is the lowest number on screen
+ * today.
+ */
+function drawKnowledgeDepth(data) {
+  const frame = document.createDocumentFragment()
+  if (!data.hasData) return frame.append(emptyNote(data.evaluation)), frame
+
+  if (!data.namedByAi) {
+    const note = document.createElement('p')
+    note.className = 'mb-3 text-xs text-text-muted'
+    note.textContent = 'Topic names below are drawn from example answers, ' +
+      'not generated — add a Gemini key in Settings for real topic names.'
+    frame.append(note)
+  }
+
+  const width = 620
+  const labelW = 190
+  const rowH = 26
+  const headerH = 22
+  const totalRows = data.subjects.reduce((n, s) => n + s.clusters.length, 0)
+  const height = data.subjects.length * headerH + totalRows * rowH + 10
+  const svg = canvas(width, height)
+
+  const plotW = width - labelW - 60
+  const lo = 0, hi = 10
+  const at = (skill) => labelW + (Math.min(hi, Math.max(lo, skill)) / hi) * plotW
+  const colourFor = (skill) => skill < 4 ? BAD : skill >= 7 ? GOOD : WARM
+
+  let y = 4
+  for (const subject of data.subjects) {
+    svg.append(text(4, y + 14, `${subject.subcategory} — average ${subject.average}`,
+      { fill: INK, 'font-size': 12, 'font-weight': 'bold' }))
+    y += headerH
+
+    for (const cluster of subject.clusters) {
+      const x = at(cluster.skill)
+      svg.append(tag('rect', {
+        x: labelW, y, width: Math.max(x - labelW, 2), height: rowH - 8, rx: 3,
+        fill: colourFor(cluster.skill),
+      }))
+      svg.append(text(labelW - 8, y + (rowH - 8) / 2 + 4, cluster.label,
+        { 'text-anchor': 'end', fill: MUTED, 'font-size': 11 }))
+      svg.append(text(x + 6, y + (rowH - 8) / 2 + 4, cluster.skill.toFixed(1),
+        { fill: INK, 'font-size': 11 }))
+      y += rowH
+    }
+  }
+
+  frame.append(svg)
+  frame.append(table(
+    ['Subject', 'Topic', 'Skill'],
+    data.subjects.flatMap((s) => s.clusters.map((c) =>
+      [s.subcategory, escapeHtmlLocal(c.label), c.skill.toFixed(1)]))))
+  return frame
+}
+
+/** The one place this file puts free text (an AI-generated topic name, or a
+ *  fallback drawn from real answerlines) into innerHTML rather than a text
+ *  node -- table() below builds rows as HTML strings, same as every other
+ *  panel's table, but those only ever carry category names and numbers this
+ *  server already controls. A cluster label is the first value in this file
+ *  that either came out of a model or is assembled from question data at
+ *  request time, so it gets escaped on the way in rather than trusted. */
+function escapeHtmlLocal(text) {
+  const div = document.createElement('div')
+  div.textContent = text
+  return div.innerHTML
+}
+
 // -------------------------------------------------------------- progress --
 
 /** One calendar month of accuracy and buzz point.
@@ -500,6 +577,13 @@ const PANELS = [
     load: (category) => api.retention(category),
     draw: drawRetention,
     finding: (d) => d.summary,
+  },
+  {
+    key: 'knowledgeDepth', label: 'Knowledge Depth', perSession: false,
+    what: 'The recommender\'s own per-cluster skill model, made readable — where inside a subject you\'re actually thin.',
+    load: (category) => api.knowledgeDepth(category),
+    draw: drawKnowledgeDepth,
+    finding: (d) => d.evaluation,
   },
 ]
 

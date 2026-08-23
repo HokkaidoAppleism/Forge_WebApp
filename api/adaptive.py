@@ -196,6 +196,91 @@ def save_state(conn, user_id, key, model, served):
          served))
 
 
+def cluster_skills(conn, user_id, category=None):
+    """Every subject this account has played, with a skill per topic cluster.
+
+    Reads the same `category_user_state.user_data` the recommender itself
+    updates on every answer (see `save_state` above) -- Knowledge Depth is a
+    view onto the model that already picks a player's next question, not a
+    second measurement of anything.
+
+    `category` matches either level, the same as `routes/stats.py`'s
+    `_scope()` -- a subject here is keyed by *subcategory* ("Biology"), while
+    the profile's own filter offers the parent *category* ("Science"), and
+    matching subcategory alone would make every other panel's filter silently
+    return nothing for this one. Applied after the parent lookup below, since
+    the parent is exactly what a category-level filter needs to compare
+    against.
+
+    Returns unlabelled: `[{subcategory, category, clusters: [{cluster, skill}]}]`.
+    Naming a cluster means a database read and possibly an AI call, neither of
+    which belongs in the module that owns the skill model -- see `clusters.py`.
+
+    **One row's `user_data` can hold more than one subject.** A row is keyed
+    by the *selection* an adaptive session was started on (`_session_key`,
+    above) -- "Biology" alone, or "Biology + Chemistry" when several were
+    picked together -- while `user_data` itself is `{subcategory: {cluster:
+    skill}}` for every subcategory the model actually served questions from.
+    Gating on `row's own key == a key inside user_data`, which is what the
+    desktop's `get_knowledge_depth` does, only ever matches a single-category
+    session; a multi-category one's data sits under keys that don't match the
+    row's own and is silently dropped. Same shape of bug as the profile filter
+    noted in `routes/stats.py` -- so this reads every subject `user_data`
+    actually contains, not just the one named by the row it came from.
+    """
+    rows = conn.execute(
+        "select category, user_data from public.category_user_state "
+        "where user_id = %s", (user_id,)).fetchall()
+
+    by_subcategory = {}
+    for row in rows:
+        # jsonb comes back from psycopg already parsed into a dict -- unlike
+        # the desktop's SQLite TEXT column, there is no string here to
+        # json.loads(). Calling it anyway raises TypeError on every row,
+        # which the broad except below would have swallowed silently.
+        parsed = row["user_data"] or {}
+        if not isinstance(parsed, dict):
+            continue
+        for subcategory, cluster_skills_raw in parsed.items():
+            if not isinstance(cluster_skills_raw, dict) or not cluster_skills_raw:
+                continue
+            # A selection played twice (once solo, once alongside another
+            # category) would otherwise show the same subject's clusters
+            # twice; the later row's numbers are the current ones and win.
+            by_subcategory[subcategory] = cluster_skills_raw
+
+    if not by_subcategory:
+        return []
+
+    # The parent category for each subject, in one query rather than one
+    # lookup per subject -- the same batching rule `clusters.py` follows for
+    # the same reason.
+    parents = {r["subcategory"]: r["category"] for r in conn.execute(
+        "select distinct on (subcategory) subcategory, category "
+        "from public.questions where subcategory = any(%s)",
+        (list(by_subcategory),)).fetchall()}
+
+    subjects = []
+    for subcategory, cluster_skills_raw in by_subcategory.items():
+        parent = parents.get(subcategory, subcategory)
+        if category and subcategory != category and parent != category:
+            continue
+        entries = []
+        for cluster_id, skill in cluster_skills_raw.items():
+            try:
+                entries.append({"cluster": int(cluster_id), "skill": round(float(skill), 1)})
+            except (TypeError, ValueError):
+                continue
+        if not entries:
+            continue
+        subjects.append({
+            "subcategory": subcategory,
+            "category": parent,
+            "clusters": entries,
+        })
+    return subjects
+
+
 def pick_question(conn, model, subcategory, clusters):
     """Ask the recommender for a cluster, then find a question in it.
 

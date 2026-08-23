@@ -10,7 +10,7 @@ const BASE = import.meta.env.VITE_API_URL
  * getSession() returns the cached token and refreshes it when it is close to
  * expiring, so this is not a network round trip per request.
  */
-async function call(path, { method = 'GET', body, params } = {}) {
+async function request(path, { method = 'GET', body, params } = {}) {
   const { data: { session } } = await supabase.auth.getSession()
   if (!session) throw new ApiError('You are signed out.', 401)
 
@@ -22,7 +22,7 @@ async function call(path, { method = 'GET', body, params } = {}) {
     }
   }
 
-  const response = await fetch(url, {
+  return fetch(url, {
     method,
     headers: {
       Authorization: `Bearer ${session.access_token}`,
@@ -30,6 +30,10 @@ async function call(path, { method = 'GET', body, params } = {}) {
     },
     body: body ? JSON.stringify(body) : undefined,
   })
+}
+
+async function call(path, options) {
+  const response = await request(path, options)
 
   // fetch only rejects on a network failure, so a 404 or a 500 arrives here
   // looking exactly like success. Checking response.ok is the whole difference
@@ -39,6 +43,42 @@ async function call(path, { method = 'GET', body, params } = {}) {
     throw new ApiError(payload.error ?? 'That request failed.', response.status, payload)
   }
   return payload
+}
+
+/**
+ * Fetches a file and saves it, for endpoints that answer with a CSV or
+ * Markdown body instead of JSON (see web/api/routes/export.py).
+ *
+ * There is no `<a href>` to point at these: the file lives behind a Bearer
+ * token, not a cookie, so a plain link can't carry the Authorization header
+ * and the browser would just hit a 401. Fetching it here and handing the
+ * bytes to an object URL is the way around that -- the click is real, it's
+ * just aimed at a blob this tab already holds instead of at the network.
+ */
+async function download(path, options) {
+  const response = await request(path, options)
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}))
+    throw new ApiError(payload.error ?? 'That request failed.', response.status, payload)
+  }
+
+  // The server names the file (routes/export.py sets Content-Disposition);
+  // falling back to something reasonable rather than failing outright if a
+  // proxy ever strips the header, since app.py's CORS config is what makes
+  // it readable here at all -- see expose_headers in web/api/app.py.
+  const disposition = response.headers.get('Content-Disposition') || ''
+  const match = disposition.match(/filename="?([^";]+)"?/)
+  const filename = match ? match[1] : 'download'
+
+  const blob = await response.blob()
+  const objectUrl = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = objectUrl
+  link.download = filename
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  URL.revokeObjectURL(objectUrl)
 }
 
 export class ApiError extends Error {
@@ -150,6 +190,8 @@ export const api = {
   negAutopsy: (category, session) =>
     call('/api/stats/negs', { params: { category, session } }),
   retention: (category) => call('/api/stats/retention', { params: { category } }),
+  knowledgeDepth: (category) =>
+    call('/api/stats/knowledge-depth', { params: { category } }),
   progress: (category, month) =>
     call('/api/stats/progress', { params: { category, month } }),
 
@@ -173,4 +215,14 @@ export const api = {
     call('/api/ai/flashcards', { method: 'POST', body: { questionId } }),
   generateGuide: (category) =>
     call('/api/ai/guide', { method: 'POST', body: { category } }),
+
+  // ----------------------------------------------------------- export/download --
+  exportFlashcards: (category) =>
+    download('/api/notebook/export/flashcards', { params: { category } }),
+  exportSelectedFlashcards: (ids) =>
+    download('/api/notebook/export/flashcards', { method: 'POST', body: { ids } }),
+  exportNotes: (category) =>
+    download('/api/notebook/export/notes', { params: { category } }),
+  exportSelectedNotes: (ids) =>
+    download('/api/notebook/export/notes', { method: 'POST', body: { ids } }),
 }

@@ -31,9 +31,11 @@ export function initNotebook({ onBack, onNeedAiKey }) {
     mergeBar: $('mergeBar'), mergeCount: $('mergeCount'),
     mergeCancelBtn: $('mergeCancelBtn'), mergeNotesBtn: $('mergeNotesBtn'),
     mergeDeleteOriginals: $('mergeDeleteOriginals'),
+    exportSelectedNotesBtn: $('exportSelectedNotesBtn'),
 
     guidesSection: $('guidesSection'), guidesList: $('guidesList'),
     generateGuideBtn: $('generateGuideBtn'), generateGuideStatus: $('generateGuideStatus'),
+    exportNotesBtn: $('exportNotesBtn'),
     notesSection: $('notesSection'), notesList: $('notesList'),
     notesEmpty: $('notesEmpty'),
 
@@ -42,6 +44,7 @@ export function initNotebook({ onBack, onNeedAiKey }) {
 
     cardsList: $('cardsList'), cardCount: $('cardCount'),
     addFlashcardBtn: $('addFlashcardBtn'), deleteAllFlashcardsBtn: $('deleteAllFlashcardsBtn'),
+    exportFlashcardsBtn: $('exportFlashcardsBtn'),
 
     viewer: $('noteViewerModal'), viewerTitle: $('modalNoteTitle'),
     viewerSubtitle: $('modalNoteSubtitle'), viewerContent: $('modalNoteContent'),
@@ -135,6 +138,7 @@ export function initNotebook({ onBack, onNeedAiKey }) {
     el.guidesSection.classList.toggle('hidden', guides.length === 0)
     el.notesSection.classList.toggle('hidden', singles.length === 0)
     el.notesEmpty.classList.toggle('hidden', notes.length > 0)
+    el.exportNotesBtn.classList.toggle('hidden', notes.length === 0)
     if (!notes.length) {
       el.notesEmpty.innerHTML =
         `<p class="text-sm text-text-muted">Nothing saved here yet. Highlight a clue while
@@ -207,6 +211,7 @@ export function initNotebook({ onBack, onNeedAiKey }) {
   function paintCards() {
     el.cardCount.textContent = cards.length ? `(${cards.length})` : ''
     el.deleteAllFlashcardsBtn.classList.toggle('hidden', cards.length === 0)
+    el.exportFlashcardsBtn.classList.toggle('hidden', cards.length === 0)
 
     if (!cards.length) {
       el.cardsList.innerHTML =
@@ -276,11 +281,45 @@ export function initNotebook({ onBack, onNeedAiKey }) {
     }
   })
 
+  // -------------------------------------------------------------- export --
+
+  /** Runs a download and puts the button back the way it found it -- showing
+   *  the error in the button's own label rather than a shared status line,
+   *  since this shelf has three separate export buttons and no one place
+   *  all of their failures naturally belong. */
+  async function runExport(button, label, action) {
+    button.disabled = true
+    const original = button.textContent
+    try {
+      await action()
+    } catch (error) {
+      button.textContent = error.message
+      setTimeout(() => { button.textContent = original }, 3000)
+      return
+    } finally {
+      button.disabled = false
+    }
+    button.textContent = original
+  }
+
+  el.exportNotesBtn.addEventListener('click', () =>
+    runExport(el.exportNotesBtn, 'Export', () => api.exportNotes(shelf)))
+
+  el.exportFlashcardsBtn.addEventListener('click', () =>
+    runExport(el.exportFlashcardsBtn, 'Export', () => api.exportFlashcards(shelf)))
+
+  el.exportSelectedNotesBtn.addEventListener('click', () =>
+    runExport(el.exportSelectedNotesBtn, 'Export selected',
+      () => api.exportSelectedNotes([...selected])))
+
   // ---------------------------------------------------------------- merge --
 
   function paintMergeBar() {
     el.mergeCount.textContent = selected.size
-    el.mergeBar.classList.toggle('hidden', selected.size < 2)
+    // The bar itself is useful from one pick (export doesn't need a pair);
+    // merging still does, so that button alone stays gated at two.
+    el.mergeBar.classList.toggle('hidden', selected.size < 1)
+    el.mergeNotesBtn.classList.toggle('hidden', selected.size < 2)
   }
 
   el.notesList.addEventListener('change', (event) => {

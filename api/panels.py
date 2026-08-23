@@ -53,6 +53,12 @@ NEG_MIN_SAMPLE = 5
 RETENTION_MIN_SAMPLE = 3
 PROGRESS_MIN_SAMPLE = 5
 
+# How far apart the strongest and weakest cluster in a subject have to sit
+# before the split is worth reporting. "You're 4.4 to 4.7 across the board" is
+# not a finding, and dressing it up as one teaches a difference that isn't
+# there.
+DEPTH_SPREAD_WORTH_REPORTING = 1.0
+
 # How many percentage points one axis has to beat the other by before it is
 # called the dominant one. Below this the two are treated as tied, because
 # picking a winner off a couple of points is noise dressed as a diagnosis.
@@ -476,6 +482,78 @@ def retention(rows):
     return {"subjects": subjects, "minSample": RETENTION_MIN_SAMPLE,
             "totalReviewed": total_reviewed, "summary": summary,
             "hasData": bool(subjects)}
+
+
+# --------------------------------------------------------- knowledge depth ---
+
+def knowledge_depth(subjects, only_category=None, named_by_ai=True):
+    """The recommender's own per-cluster skill model, made readable.
+
+    `category_user_state.user_data` already holds a skill rating per topic
+    cluster, built up over adaptive sessions -- it is what picks your next
+    question. It has never been shown to anyone, so the app knows more about
+    where a player's knowledge is thin than it has ever told them. This is the
+    only panel that reports *inside* a subject rather than across subjects:
+    "your Biology is fine except for cell organelles" is a sentence nothing
+    else here can produce.
+
+    `subjects` arrives already shaped by the caller (one entry per subject,
+    each with a `clusters` list of {cluster, label, skill}), because working
+    out the labels means a database read and possibly an AI call, and neither
+    belongs in this module. Everything below is ordering and wording.
+
+    There is no minimum-sample gate, and that is a real difference from the
+    other five panels -- not an oversight. The skill numbers are not counts of
+    anything; they are the recommender's own running estimate, already damped
+    by its update rule, and there is no attempt count in `user_data` to gate
+    on. `named_by_ai` is carried through instead so the frontend can say the
+    labels are provisional when they came from the fallback namer.
+    """
+    if not subjects:
+        return {
+            "subjects": [], "hasData": False, "namedByAi": named_by_ai,
+            "evaluation": (
+                f"No topic-level data for {only_category} yet."
+                if only_category else
+                "Play an Adaptive Learning session and your topic-level "
+                "strengths will show up here."),
+        }
+
+    shaped = []
+    for subject in subjects:
+        entries = sorted(subject["clusters"], key=lambda e: e["skill"])
+        skills = [e["skill"] for e in entries]
+        shaped.append({
+            "subcategory": subject["subcategory"],
+            "category": subject["category"],
+            "clusters": entries,          # weakest first -- the whole point
+            "average": round(sum(skills) / len(skills), 1),
+            "weakest": entries[0],
+            "strongest": entries[-1],
+            "spread": round(max(skills) - min(skills), 1),
+        })
+
+    shaped.sort(key=lambda s: s["average"])
+
+    spread_worthy = [s for s in shaped
+                     if s["spread"] >= DEPTH_SPREAD_WORTH_REPORTING
+                     and len(s["clusters"]) > 1]
+    if spread_worthy:
+        s = max(spread_worthy, key=lambda s: s["spread"])
+        evaluation = (
+            f"Your {s['subcategory']} is uneven: {s['strongest']['label']} sits at "
+            f"{s['strongest']['skill']} while {s['weakest']['label']} is "
+            f"{s['weakest']['skill']}. That gap is where the points are.")
+    else:
+        weakest = shaped[0]
+        evaluation = (
+            f"{weakest['subcategory']} is your thinnest subject so far "
+            f"({weakest['average']} average). Topics within each subject are "
+            f"still close together — play more adaptive sessions and the split "
+            f"will sharpen.")
+
+    return {"subjects": shaped, "hasData": True, "namedByAi": named_by_ai,
+            "evaluation": evaluation}
 
 
 # ---------------------------------------------------------------- progress ---

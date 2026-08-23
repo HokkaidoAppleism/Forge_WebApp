@@ -339,18 +339,25 @@
           <div class="lg:col-span-2">
             <div class="mb-4 flex items-center justify-between border-b border-gray-600 pb-2">
               <h2 class="text-xl font-bold">Study Guides</h2>
-              <!-- Built from every clue saved on this shelf via Save Highlight
-                   while reading -- see routes/ai.py's /api/ai/guide. -->
-              <button id="generateGuideBtn" class="rounded bg-accent-dark px-3 py-1 text-sm font-bold text-white hover:bg-accent-dark-hover" title="Build a guide from your saved clues on this shelf">Generate New Guide</button>
+              <div class="flex items-center gap-2">
+                <!-- Whole shelf, guides and question notes together, as one
+                     markdown file -- see routes/export.py's build_export_markdown. -->
+                <button id="exportNotesBtn" class="hidden rounded bg-tertiary-dark px-3 py-1 text-sm font-bold hover:bg-[#4b3c37]" title="Download every guide and note on this shelf as Markdown">Export</button>
+                <!-- Built from every clue saved on this shelf via Save Highlight
+                     while reading -- see routes/ai.py's /api/ai/guide. -->
+                <button id="generateGuideBtn" class="rounded bg-accent-dark px-3 py-1 text-sm font-bold text-white hover:bg-accent-dark-hover" title="Build a guide from your saved clues on this shelf">Generate New Guide</button>
+              </div>
             </div>
             <div id="generateGuideStatus" class="hidden mb-3 rounded-lg border border-[#584741] bg-secondary-dark p-3 text-sm text-text-muted"></div>
 
-            <!-- Appears once two or more per-question notes are ticked. -->
+            <!-- Appears once at least one per-question note is ticked (merge
+                 itself still needs two; export works from just one). -->
             <div id="mergeBar" class="mb-3 hidden rounded-lg bg-secondary-dark p-3">
               <div class="flex items-center justify-between gap-2">
                 <span class="text-sm text-text-muted"><span id="mergeCount">0</span> selected</span>
                 <div class="flex items-center gap-2">
                   <button id="mergeCancelBtn" class="rounded bg-tertiary-dark px-3 py-1 text-sm font-bold">Clear</button>
+                  <button id="exportSelectedNotesBtn" class="rounded bg-tertiary-dark px-3 py-1 text-sm font-bold hover:bg-[#4b3c37]">Export selected</button>
                   <button id="mergeNotesBtn" class="rounded bg-sky-600 px-3 py-1 text-sm font-bold text-white hover:bg-sky-700">Merge into guide</button>
                 </div>
               </div>
@@ -388,6 +395,7 @@
             <div class="mb-4 flex items-center justify-between border-b border-gray-600 pb-2">
               <h2 class="text-xl font-bold">Flashcards <span id="cardCount" class="text-sm font-normal text-text-muted"></span></h2>
               <div class="flex items-center gap-2">
+                <button id="exportFlashcardsBtn" class="hidden rounded bg-tertiary-dark px-3 py-1 text-sm font-bold hover:bg-[#4b3c37]" title="Download every card on this shelf as CSV (imports into Anki as-is)">Export</button>
                 <button id="addFlashcardBtn" class="rounded bg-green-600 px-3 py-1 text-sm font-bold text-white hover:bg-green-700">+ Add card</button>
                 <button id="deleteAllFlashcardsBtn" class="hidden rounded bg-red-600 px-3 py-1 text-sm font-bold text-white hover:bg-red-700">Delete All</button>
               </div>

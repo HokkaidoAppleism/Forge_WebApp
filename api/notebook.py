@@ -25,6 +25,7 @@ cannot accidentally run outside RLS.
 """
 
 import re
+from datetime import datetime
 
 # The AI opens a guide by restating the question:
 #   Here's an explanation of the quizbowl question about Gaius Julius Caesar:
@@ -242,6 +243,111 @@ def section_heading_name(section):
             name = line.lstrip("#").strip()
             return re.sub(r"\s*\*\(Difficulty[^)]*\)\*\s*$", "", name).strip()
     return section.strip()[:80]
+
+
+# ------------------------------------------------------------------ export ---
+# Ported from merged_api.py's `_renest_note_markdown` / `build_notes_markdown`
+# -- pure text assembly, no model involved, so it lives here rather than in
+# routes/export.py the way build_note_sections above lives here rather than
+# in routes/notebook.py.
+
+def _deepest_heading_level(content):
+    """The largest `#` run used in `content`, ignoring fenced code."""
+    deepest, fenced = 0, False
+    for line in (content or "").split("\n"):
+        if line.lstrip().startswith("```"):
+            fenced = not fenced
+            continue
+        if fenced:
+            continue
+        m = re.match(r"^(#{1,6})\s+\S", line)
+        if m:
+            deepest = max(deepest, len(m.group(1)))
+    return deepest
+
+
+def _shift_headings(content, shift):
+    """`content` with every heading moved `shift` levels deeper, capped at 6.
+
+    Fenced code is left alone: a ``` block can legitimately contain a line
+    starting with #, and that is code, not a heading.
+    """
+    if shift <= 0:
+        return content
+    out, fenced = [], False
+    for line in (content or "").split("\n"):
+        if line.lstrip().startswith("```"):
+            fenced = not fenced
+        m = None if fenced else re.match(r"^(#{1,6})(\s+)(.*)$", line)
+        if m:
+            line = "#" * min(6, len(m.group(1)) + shift) + m.group(2) + m.group(3)
+        out.append(line)
+    return "\n".join(out)
+
+
+def _export_entry(row, clean_answerline):
+    """One `notebook_notes` row as a `### heading` section of an export file.
+
+    An exported entry sits under a `## Your Study Guides` / `## Question
+    Notes` group heading. A guide's own content starts at `##` -- the level
+    `build_note_sections` above already writes its per-question sections at
+    -- which in an export would read as a *sibling* of the group heading
+    instead of as that guide's contents. So headings inside the entry move
+    down by however much still leaves every level distinct: never a flat
+    clamp to 6, which used to collapse `#####` and `######` onto the same
+    level and make a sub-point read as a sibling of its own parent -- the
+    exact thing this shift exists to prevent.
+    """
+    content = row["notes_content"] or ""
+    lines = content.split("\n")
+    i = 0
+    while i < len(lines) and not lines[i].strip():
+        i += 1
+    # The entry gets its own heading below; a leading "# Title" line in the
+    # content would just repeat it.
+    if i < len(lines) and re.match(r"^#\s+\S", lines[i]):
+        del lines[i]
+    content = "\n".join(lines)
+
+    shift = max(0, min(2, 6 - _deepest_heading_level(content)))
+    body = _shift_headings(content, shift).strip()
+
+    name = (row["title"] or "").strip() or clean_answerline(row["answer_text"] or "") or None
+    head = name or f"Untitled ({str(row['created_at'])[:10]})"
+    if row["difficulty"] is not None:
+        head += f" (difficulty {row['difficulty']})"
+    return f"### {head}\n\n{body}\n\n"
+
+
+def build_export_markdown(notes, heading, clean_answerline):
+    """Guides first, then question notes, as one markdown document.
+
+    Shared by the whole-shelf export and the selected-rows export, so the two
+    paths can't drift into describing the same data two different ways.
+    `notes` rows need `notes_content`, `title`, `answer_text`, `difficulty`,
+    `is_merged`, `created_at`; `heading` is the document's own `# ` title.
+    """
+    guides = [n for n in notes if n["is_merged"]]
+    singles = [n for n in notes if not n["is_merged"]]
+
+    counted = []
+    if guides:
+        counted.append(f"{len(guides)} study guide{'' if len(guides) == 1 else 's'}")
+    if singles:
+        counted.append(f"{len(singles)} question note{'' if len(singles) == 1 else 's'}")
+    today = datetime.now().strftime("%Y-%m-%d")
+    md = (f"# {heading}\n\n"
+          f"Exported from ForgeQB on {today}. Contains {' and '.join(counted)}.\n\n")
+
+    # Each group heading only appears when it has something under it, the same
+    # rule the notebook column itself follows.
+    if guides:
+        md += "---\n\n## Your Study Guides\n\n"
+        md += "".join(_export_entry(n, clean_answerline) for n in guides)
+    if singles:
+        md += "---\n\n## Question Notes\n\n"
+        md += "".join(_export_entry(n, clean_answerline) for n in singles)
+    return md
 
 
 def sort_guide_sections(sections):

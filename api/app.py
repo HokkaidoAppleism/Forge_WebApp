@@ -25,6 +25,7 @@ import db
 from routes.adaptive import bp as adaptive_bp
 from routes.ai import bp as ai_bp
 from routes.answers import bp as answers_bp
+from routes.export import bp as export_bp
 from routes.notebook import bp as notebook_bp
 from routes.questions import bp as questions_bp
 from routes.review import bp as review_bp
@@ -43,11 +44,16 @@ def create_app():
         resources={r"/api/*": {"origins": config.CORS_ORIGINS}},
         allow_headers=["Authorization", "Content-Type"],
         methods=["GET", "POST", "OPTIONS"],
+        # A cross-origin fetch hides every response header from the caller's
+        # JS by default except a fixed "safe" set -- Content-Disposition is
+        # not on it. Without this, api.js's download() has a response body
+        # but no filename to save it under; see routes/export.py.
+        expose_headers=["Content-Disposition"],
         max_age=3600,
     )
 
     for blueprint in (questions_bp, answers_bp, review_bp, stats_bp,
-                      adaptive_bp, notebook_bp, settings_bp, ai_bp):
+                      adaptive_bp, notebook_bp, settings_bp, ai_bp, export_bp):
         app.register_blueprint(blueprint)
 
     @app.get("/api/health")
