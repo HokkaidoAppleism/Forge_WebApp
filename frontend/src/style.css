@@ -1,0 +1,128 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Everything below is carried over from the <style> block at the top of
+   electron-app/index.html, because it is the part of the desktop look that
+   utility classes cannot express. The comments come with it: they record why
+   these rules are the shape they are, and re-deriving that from the CSS alone
+   is not possible. */
+
+@layer base {
+  body {
+    background-color: #1d1816;
+    color: #efe0db;
+  }
+
+  strong {
+    font-weight: 600;
+    color: #efe0db;
+  }
+}
+
+@layer components {
+  /* The power portion of a tossup - everything up to and including the (*).
+     Answer correctly before that mark and the buzz is worth 15 rather than 10,
+     so while a question is being read it is the single most useful thing on
+     screen: it says whether the points are still there.
+
+     The reader has always wrapped these words in <strong>, and the rule above
+     made that invisible - font-weight 600 in exactly the body text colour, on
+     a dark background. The markup was right and the styling cancelled it out.
+
+     The first fix for that was to colour the run amber, and that was the wrong
+     call: power runs from the *start* of the tossup, so it is not an accent on
+     a phrase, it is most of the opening paragraph. Recolouring that much body
+     text reads as a warning rather than as emphasis, and it fights the answer
+     line and the timer, which have a real claim on being the coloured things
+     on screen. Weight and slant carry it instead. */
+  .power-text {
+    font-weight: 800;
+    font-style: italic;
+    color: inherit;
+  }
+
+  /* The (*) itself is a boundary marker, not a word to read. Dimmed and spaced
+     so the eye can find where power ends without tripping over it
+     mid-sentence. */
+  .power-mark {
+    color: #baa7a1;
+    font-weight: 400;
+    font-style: normal;
+    padding: 0 0.15em;
+  }
+
+  /* Power highlighting switched off. Done as a class on <body> rather than by
+     changing what the reader emits, so the toggle applies to the tossup
+     already on screen instead of only to the next one. */
+  body.no-power .power-text {
+    font-weight: inherit;
+    font-style: normal;
+  }
+
+  body.no-power .power-mark {
+    color: inherit;
+    padding: 0;
+  }
+
+  /* Study guide typography.
+     The desktop markup asks for Tailwind's "prose" classes, but the CDN build
+     it loads does not include the typography plugin, so those classes did
+     nothing at all -- every heading rendered at body size and the sections ran
+     together with no breathing room. These rules replace it, and are carried
+     over rather than re-derived. Scoped to .guide so they apply to a rendered
+     note wherever it is shown. */
+  .guide { line-height: 1.7; }
+  .guide > :first-child { margin-top: 0; }
+
+  /* The guide's own name is shown in the modal header, so a leading "# Title"
+     in the body would just repeat it. An AI explanation has no such header --
+     its leading "# Answerline" *is* the content -- so .show-title opts back
+     in wherever that heading is the only place the answerline appears. */
+  .guide > h1:first-child { display: none; }
+  .guide.show-title > h1:first-child { display: block; }
+
+  .guide h1 { font-size: 1.6rem; font-weight: 700; margin: 0 0 1.25rem; }
+
+  /* One answerline per section - given room so entries read as separate cards
+     rather than as one wall of text. */
+  .guide h2 {
+    font-size: 1.2rem;
+    font-weight: 700;
+    color: #f6b17a;
+    margin: 2.25rem 0 0.85rem;
+    padding-bottom: 0.4rem;
+    border-bottom: 1px solid #4a3f3a;
+  }
+  .guide h3 { font-size: 1.05rem; font-weight: 600; margin: 1.5rem 0 0.6rem; }
+  .guide p { margin: 0 0 1rem; }
+  .guide ul, .guide ol { margin: 0 0 1.15rem; padding-left: 1.5rem; }
+  .guide ul { list-style: disc; }
+  .guide ol { list-style: decimal; }
+  .guide li { margin-bottom: 0.6rem; }
+  .guide em { color: #c9b8b2; }
+
+  /* The rule between sections carries the visual separation, so it gets much
+     more space than a default <hr>. */
+  .guide hr { border: 0; border-top: 1px solid #4a3f3a; margin: 2.75rem 0; }
+
+  .guide blockquote {
+    border-left: 3px solid #6b5a52;
+    padding-left: 1rem;
+    margin: 0 0 1rem;
+    color: #d6c4be;
+  }
+
+  /* The multi-selects in the sidebar. Chrome paints a selected <option> with
+     its own blue whatever the stylesheet says, which on this palette is the
+     one colour in the app that belongs to nothing. */
+  .chips option {
+    padding: 0.35rem 0.5rem;
+    border-radius: 0.25rem;
+  }
+
+  .chips option:checked {
+    background: #584741 linear-gradient(0deg, #584741 0%, #584741 100%);
+    color: #efe0db;
+  }
+}

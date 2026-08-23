@@ -1,0 +1,17 @@
+# Secrets. .env.example files are templates and stay tracked.
+api/.env
+frontend/.env.local
+
+# Python
+api/__pycache__/
+api/routes/__pycache__/
+tools/__pycache__/
+api/.venv/
+*.pyc
+
+# Node / the frontend build
+frontend/node_modules/
+frontend/dist/
+
+# Editor/OS cruft
+.DS_Store

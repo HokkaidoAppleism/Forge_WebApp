@@ -1,0 +1,842 @@
+<!doctype html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Forge QB</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body class="font-sans">
+
+    <!-- ================================================== signed out ===== -->
+    <!-- The desktop app has no sign-in screen at all: one machine, one
+         player, no account. This is the one screen the port has to invent, so
+         it borrows the reader's own furniture -- same card, same border, same
+         palette -- rather than looking like a different product's login. -->
+    <div id="authScreen" class="hidden min-h-screen items-center justify-center p-6">
+      <div class="w-full max-w-sm rounded-xl border border-[#584741] p-6">
+        <h1 class="text-3xl font-bold tracking-tight">Forge QB</h1>
+        <p class="mt-2 text-sm text-text-muted">
+          Sign in to practise. Your stats, review list and notes follow the
+          account, not the machine.
+        </p>
+        <form id="authForm" class="mt-5 flex flex-col gap-3">
+          <input id="email" type="email" placeholder="you@example.com" required
+                 autocomplete="email"
+                 class="rounded-lg border border-[#584741] bg-[#1d1816] p-3 focus:border-[#efe0db] focus:outline-none" />
+          <input id="password" type="password" placeholder="Password" required
+                 minlength="8" autocomplete="current-password"
+                 class="rounded-lg border border-[#584741] bg-[#1d1816] p-3 focus:border-[#efe0db] focus:outline-none" />
+          <div class="flex gap-2">
+            <button type="submit" data-mode="signin"
+                    class="flex-1 rounded-full bg-[#efe0db] px-4 py-2 font-bold text-[#1d1816]">Sign in</button>
+            <button type="submit" data-mode="signup"
+                    class="flex-1 rounded-full bg-[#3e322e] px-4 py-2 font-bold">Create account</button>
+          </div>
+        </form>
+        <p id="authMessage" class="mt-3 text-sm text-[#f6b17a]"></p>
+      </div>
+    </div>
+
+    <!-- =================================================== signed in ===== -->
+    <div id="appScreen" class="hidden">
+
+      <!-- =========== Header =========== -->
+      <!-- The desktop header carries six icon buttons and all six are here now.
+           The rule they arrived under still holds for anything added later: an
+           icon that opens an empty page is worse than an icon that is not there
+           -- it reads as broken rather than as unbuilt -- so a button appears
+           in the same change as the endpoints behind it, never before. -->
+      <header class="flex items-center justify-between border-b border-[#3e322e] px-6 py-4">
+        <h1 class="text-3xl font-bold tracking-tight">Forge QB</h1>
+        <div class="flex items-center gap-2">
+          <span id="whoami" class="mr-2 hidden text-sm text-text-muted sm:inline"></span>
+          <button id="notebookBtn" class="flex h-10 w-10 items-center justify-center rounded-full bg-[#3e322e] hover:bg-[#584741]" title="View Notebook">
+            <svg xmlns="http://www.w3.org/2000/svg" class="size-5" viewBox="0 0 24 24" fill="currentColor"><path d="M4 6h16v2H4zm0 5h16v2H4zm0 5h16v2H4z"></path></svg>
+          </button>
+          <button id="recordsBtn" class="flex h-10 w-10 items-center justify-center rounded-full bg-[#3e322e] hover:bg-[#584741]" title="Adaptive Learning Records">
+            <svg xmlns="http://www.w3.org/2000/svg" class="size-5" viewBox="0 0 24 24" fill="currentColor"><path d="M5 3h12a2 2 0 0 1 2 2v16l-4-2-4 2-4-2-4 2V5a2 2 0 0 1 2-2zm2 4v2h8V7H7zm0 4v2h8v-2H7z"/></svg>
+          </button>
+          <button id="reviewSettingsBtn" class="flex h-10 w-10 items-center justify-center rounded-full bg-[#3e322e] hover:bg-[#584741]" title="Review Missed settings">
+            <svg xmlns="http://www.w3.org/2000/svg" class="size-5" viewBox="0 0 24 24" fill="currentColor"><path d="M12 5V1L7 6l5 5V7a6 6 0 1 1-6 6H4a8 8 0 1 0 8-8z"/></svg>
+          </button>
+          <button id="profileBtn" class="flex h-10 w-10 items-center justify-center rounded-full bg-[#3e322e] hover:bg-[#584741]" title="View Profile">
+            <svg xmlns="http://www.w3.org/2000/svg" class="size-5" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 4c1.93 0 3.5 1.57 3.5 3.5S13.93 13 12 13s-3.5-1.57-3.5-3.5S10.07 6 12 6zm0 14c-2.03 0-4.43-.82-6.14-2.88a9.947 9.947 0 0 1 12.28 0C16.43 19.18 14.03 20 12 20z"/></svg>
+          </button>
+          <button id="aboutBtn" class="flex h-10 w-10 items-center justify-center rounded-full bg-[#3e322e] hover:bg-[#584741]" title="About, terms and privacy">
+            <svg xmlns="http://www.w3.org/2000/svg" class="size-5" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg>
+          </button>
+          <button id="settingsBtn" class="flex h-10 w-10 items-center justify-center rounded-full bg-[#3e322e] hover:bg-[#584741]" title="Settings">
+            <svg xmlns="http://www.w3.org/2000/svg" class="size-5" viewBox="0 0 24 24" fill="currentColor"><path d="M19.43 12.98c.04-.32.07-.64.07-.98s-.03-.66-.07-.98l2.11-1.65c.19-.15.24-.42.12-.64l-2-3.46c-.12-.22-.39-.3-.61-.22l-2.49 1c-.52-.4-1.08-.73-1.69-.98l-.38-2.65C14.46 2.18 14.25 2 14 2h-4c-.25 0-.46.18-.49.42l-.38 2.65c-.61.25-1.17.59-1.69.98l-2.49-1c-.23-.09-.49 0-.61.22l-2 3.46c-.13.22-.07.49.12.64l2.11 1.65c-.04.32-.07.65-.07.98s.03.66.07.98l-2.11 1.65c-.19.15-.24.42-.12.64l2 3.46c.12.22.39.3.61.22l2.49-1c.52.4 1.08.73 1.69.98l.38 2.65c.03.24.24.42.49.42h4c.25 0 .46-.18.49-.42l.38-2.65c.61-.25 1.17-.59 1.69-.98l2.49 1c.23.09.49 0 .61-.22l2-3.46c.12-.22.07-.49-.12-.64l-2.11-1.65zM12 15.5c-1.93 0-3.5-1.57-3.5-3.5s1.57-3.5 3.5-3.5 3.5 1.57 3.5 3.5-1.57 3.5-3.5 3.5z"/></svg>
+          </button>
+          <button id="signOutBtn" class="rounded-full bg-[#3e322e] px-4 py-2 text-sm font-bold hover:bg-[#584741]">Sign out</button>
+        </div>
+      </header>
+
+      <!-- =========== Reader =========== -->
+      <div id="readerScreen" class="flex flex-col gap-1 px-6 py-6 lg:flex-row">
+
+        <!-- === Sidebar === -->
+        <aside class="w-full shrink-0 lg:w-80">
+          <h2 class="px-4 pb-3 pt-2 text-[22px] font-bold tracking-tight">Question Settings</h2>
+
+          <!-- Selector card. The white bar down the left edge is the one piece
+               of chrome in the app that is purely decorative, and it is also
+               the thing that makes this read as ForgeQB rather than as a form. -->
+          <div class="relative mx-4 rounded-xl bg-[#2c2321] p-5 shadow-lg">
+            <div class="absolute left-0 top-0 h-full w-1 rounded-l-xl bg-white/70"></div>
+
+            <!-- Category -->
+            <label class="mb-4 block text-sm font-medium text-[#baa7a1]">Category
+              <select id="categorySelect" multiple size="5"
+                class="chips mt-1 w-full rounded-lg border border-[#584741] bg-[#1d1816] p-3 text-white focus:border-[#efe0db] focus:outline-none">
+                <option value="" selected>Any Category</option>
+              </select>
+            </label>
+
+            <!-- Subcategory. Hidden until the chosen category actually has
+                 subcategories, rather than shown empty. -->
+            <label id="subcategoryWrapper" class="mb-4 hidden text-sm font-medium text-[#baa7a1]">Subcategory
+              <select id="subcategorySelect" multiple size="5"
+                class="chips mt-1 w-full rounded-lg border border-[#584741] bg-[#1d1816] p-3 text-white focus:border-[#efe0db] focus:outline-none">
+              </select>
+            </label>
+
+            <!-- Difficulty -->
+            <label class="block text-sm font-medium text-[#baa7a1]">Difficulty
+              <select id="difficultySelect" multiple size="5"
+                class="chips mt-1 w-full rounded-lg border border-[#584741] bg-[#1d1816] p-3 text-white focus:border-[#efe0db] focus:outline-none">
+                <option value="" selected>Any Difficulty</option>
+                <option value="1">1</option>
+                <option value="2">2</option>
+                <option value="3">3</option>
+                <option value="4">4</option>
+                <option value="5">5</option>
+                <option value="6">6</option>
+                <option value="7">7</option>
+                <option value="8">8</option>
+                <option value="9">9</option>
+                <option value="10">10</option>
+              </select>
+            </label>
+          </div>
+
+          <!-- Voice Mode and Allow rebuzzes both sit here on the desktop. They
+               are deliberately absent rather than disabled: rebuzzes need the
+               server to agree not to record an answer, and Voice Mode needs
+               speech synthesis wired to the reader. A switch that is present
+               and does nothing is worse than one that is not there yet. -->
+
+          <!-- The powermark: everything from the first word up to the (*),
+               where a correct buzz is worth 15 rather than 10. On by default. -->
+          <div class="mt-4 px-4">
+            <label class="flex cursor-pointer items-center gap-2 text-sm font-medium text-[#baa7a1]"
+                   title="Bold italic up to the (*), where a correct buzz is worth 15 instead of 10.">
+              <input id="powerHighlightToggle" type="checkbox" class="h-4 w-4 cursor-pointer accent-[#efe0db]" checked>
+              Powermark
+            </label>
+          </div>
+
+          <!-- Speed Slider -->
+          <div class="mt-4 px-4">
+            <label for="readingSpeed" class="mb-1 block text-sm font-medium text-[#baa7a1]">Reading Speed</label>
+            <input id="readingSpeed" type="range" min="50" max="500" value="350"
+                  class="h-2 w-full cursor-pointer appearance-none rounded-lg bg-[#584741]">
+            <div class="flex justify-between text-xs text-[#baa7a1] opacity-70"><span>Slower</span><span>Faster</span></div>
+            <p id="speedDisplay" class="mt-1 text-sm text-[#baa7a1]">200 ms per word</p>
+          </div>
+
+          <!-- Action Buttons -->
+          <div class="mt-4 flex flex-col gap-2 px-4">
+            <button id="getNewQuestionBtn" class="rounded-full bg-[#efe0db] px-4 py-2 font-bold text-[#1d1816] disabled:cursor-not-allowed disabled:opacity-40" title="Keyboard shortcut: S">Start Reader</button>
+            <button id="getManyQuestionsBtn" class="rounded-full bg-[#3e322e] px-4 py-2 font-bold disabled:cursor-not-allowed disabled:opacity-40" title="Keyboard shortcut: N">Next Question</button>
+            <button id="adaptiveLearningBtn" class="rounded-full bg-[#3e322e] px-4 py-2 font-bold disabled:cursor-not-allowed disabled:opacity-40" title="Keyboard shortcut: A">Adaptive Learning</button>
+            <button id="reviewMissedBtn" class="rounded-full bg-[#3e322e] px-4 py-2 font-bold disabled:cursor-not-allowed disabled:opacity-40" title="Drill the questions you've missed">Review Missed</button>
+            <button id="stopReviewBtn" class="hidden rounded-full bg-red-700 px-4 py-2 font-bold text-white hover:bg-red-800" title="Leave review mode and go back to normal questions">Stop Reviewing</button>
+            <button id="pauseBtn" class="rounded-full bg-[#3e322e] px-4 py-2 font-bold" title="Keyboard shortcut: P">Pause</button>
+          </div>
+        </aside>
+
+        <!-- === Main Content === -->
+        <main class="flex-1">
+          <!-- Text Statistics Box -->
+          <section class="mb-6 rounded-xl border border-[#584741] p-4">
+            <h2 class="mb-2 text-lg font-bold">Your Stats</h2>
+            <div class="flex flex-wrap gap-6 text-sm text-[#baa7a1]">
+              <div><span class="font-semibold text-white">P / T / N:</span> <span id="ptn">0 / 0 / 0</span></div>
+              <div><span class="font-semibold text-white">Tossups Heard:</span> <span id="tossupsHeard">0</span></div>
+              <div><span class="font-semibold text-white">Points:</span> <span id="pointsScored">0</span></div>
+              <div><span class="font-semibold text-white">Celerity:</span> <span id="celerity">0.000</span></div>
+            </div>
+            <p id="streakLine" class="mt-2 text-sm text-[#baa7a1]"></p>
+          </section>
+
+          <!-- Adaptive Session Stats. Hidden outside an adaptive session --
+               these numbers describe a sitting, so showing them at zero during
+               ordinary play would read as stats that never move. -->
+          <section id="adaptiveSessionStats" class="mb-6 hidden rounded-xl border border-[#584741] p-4">
+            <div class="flex items-start justify-between gap-4">
+              <div>
+                <h2 class="mb-2 text-lg font-bold">Adaptive Session Stats</h2>
+                <div class="flex flex-wrap gap-6 text-sm text-[#baa7a1]">
+                  <div><span class="font-semibold text-white">Subject:</span> <span id="adaptiveSubject">—</span></div>
+                  <div><span class="font-semibold text-white">Current Skill:</span> <span id="adaptiveSkill">—</span></div>
+                  <div><span class="font-semibold text-white">Answered:</span> <span id="adaptiveAnswered">0</span></div>
+                  <div><span class="font-semibold text-white">Correct:</span> <span id="adaptiveCorrect">0</span></div>
+                  <div><span class="font-semibold text-white">Accuracy:</span> <span id="adaptiveAccuracy">0%</span></div>
+                </div>
+                <p id="adaptiveResumed" class="mt-2 hidden text-xs text-[#f6b17a]"></p>
+              </div>
+              <button id="saveAndQuitAdaptiveBtn" class="shrink-0 rounded-full bg-red-600 px-4 py-2 font-bold text-white transition-colors hover:bg-red-700">Save &amp; Quit</button>
+            </div>
+          </section>
+
+          <!-- Current Question -->
+          <section class="rounded-xl border border-[#584741] p-4">
+            <div class="mb-3 flex items-center justify-between gap-3">
+              <h2 class="text-lg font-bold">Question Reader</h2>
+              <div class="flex items-center gap-3">
+                <!-- Appears only while text is actually selected inside the
+                     tossup. A save button with nothing to save is a button that
+                     has to explain itself when pressed. -->
+                <button id="saveHighlightBtn" class="hidden shrink-0 rounded-full bg-green-600 px-3 py-1 text-sm font-bold hover:bg-green-700 disabled:opacity-60" title="Save the selected phrase as a clue">Save Highlight</button>
+                <span id="questionMeta" class="text-right text-xs text-text-muted"></span>
+              </div>
+            </div>
+            <!-- Shown when a review session runs past everything that was due:
+                 the questions are still worth drilling, but saying so is honest
+                 about the schedule rather than quietly ignoring it. -->
+            <p id="reviewAheadNotice" class="mb-2 hidden text-xs text-[#f6b17a]"></p>
+            <p id="questionContainer" class="min-h-[3rem] leading-relaxed">Click “Start Reader” to start practicing</p>
+          </section>
+
+          <!-- Answer Box -->
+          <section class="mt-6 rounded-xl border border-[#584741] p-4">
+            <h3 class="mb-3 text-lg font-bold">Your Answer</h3>
+            <div class="flex items-center gap-3">
+              <!-- Starts disabled: the box only unlocks once you've buzzed. -->
+              <input id="answerInput" placeholder="Buzz to answer" disabled
+                     class="flex-1 rounded-lg border border-[#584741] bg-[#1d1816] p-3 focus:border-[#efe0db] focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"/>
+              <span id="buzzTimer" class="hidden min-w-[5.5rem] text-center font-mono text-lg font-bold tabular-nums" title="Time remaining"></span>
+              <button id="submitAnswerBtn" data-state="buzz" class="rounded-full bg-emerald-600 px-4 py-2 font-bold disabled:opacity-40" title="Keyboard shortcut: Enter or Space">Buzz</button>
+            </div>
+            <div id="answerFeedback" class="mt-4 hidden rounded-lg p-3 text-sm"></div>
+            <!-- Shown once a tossup closes out: file this question for review
+                 even if it wasn't negged (a lucky guess is still a gap). -->
+            <button id="addToMissedBtn" class="mt-3 hidden rounded-full bg-amber-700 px-3 py-1 text-xs font-bold text-white hover:bg-amber-800 disabled:opacity-60" title="Put this question in your Review Missed list">Add to Missed</button>
+          </section>
+
+          <!-- AI Explanation. Reads the question off its id on the server --
+               see web/api/routes/ai.py -- so nothing here ever sends the
+               question or answer text up; only the id and, once buzzed,
+               whatever was typed. -->
+          <section class="mt-6 rounded-xl border border-[#584741] p-4">
+            <h3 class="mb-3 flex items-center justify-between text-lg font-bold">
+              AI Explanation
+              <!-- Starts disabled: enabled once a tossup is loaded, reset by
+                   abandonTossup() in main.js. -->
+              <button id="getExplanationBtn" disabled class="rounded-full bg-sky-600 px-3 py-1 text-sm font-bold disabled:cursor-not-allowed disabled:opacity-40" title="Keyboard shortcut: E">Get Explanation</button>
+            </h3>
+            <div id="explanationContainer" class="guide show-title text-sm text-text-muted">
+              Click &ldquo;Get Explanation&rdquo; to see an AI-generated explanation of the question.
+            </div>
+          </section>
+
+          <!-- Flashcards, drafted from the current tossup. Generation and
+               saving are two steps -- see routes/ai.py -- so what appears here
+               is a proposal, and only "Save" writes anything to the notebook. -->
+          <section class="mt-6 rounded-xl border border-[#584741] p-4">
+            <h3 class="mb-3 flex items-center justify-between text-lg font-bold">
+              Flashcards
+              <button id="createFlashcardBtn" disabled class="rounded-full bg-amber-600 px-3 py-1 text-sm font-bold disabled:cursor-not-allowed disabled:opacity-40" title="Draft flashcards from this tossup">Create Flashcard</button>
+            </h3>
+            <div id="draftFlashcardsContainer" class="space-y-2 text-sm text-text-muted">
+              Click &ldquo;Create Flashcard&rdquo; to draft flashcards from this tossup.
+            </div>
+          </section>
+        </main>
+      </div>
+
+      <!-- =========== Adaptive Learning Setup =========== -->
+      <div id="adaptiveSetupScreen" class="hidden px-6 py-6">
+        <button id="cancelAdaptiveBtn" class="mb-4 rounded-full bg-[#3e322e] px-4 py-2 font-bold">&larr; Back to Quiz</button>
+        <h2 class="mb-1 text-2xl font-bold">Adaptive Learning Setup</h2>
+        <p class="mb-4 text-sm text-text-muted">
+          Picks questions from the topic clusters you are weakest on, and moves
+          with you as you improve.
+        </p>
+
+        <div class="relative mx-auto max-w-3xl rounded-xl bg-[#2c2321] p-5 shadow-lg">
+          <div class="absolute left-0 top-0 h-full w-1 rounded-l-xl bg-white/70"></div>
+
+          <!-- Multi-select. A general category ("Literature") stands for all of
+               its shelves, so picking it is the same as ticking all five; the
+               backend expands it. Picking several draws between them by
+               weight. -->
+          <label class="mb-1 block text-sm font-medium text-[#baa7a1]">Subjects
+            <select id="adaptiveCategorySelect" multiple size="10"
+              class="chips mt-1 w-full rounded-lg border border-[#584741] bg-[#1d1816] p-3 text-white focus:border-[#efe0db] focus:outline-none">
+            </select>
+          </label>
+          <p class="mb-3 text-xs text-[#baa7a1]">
+            Ctrl-click (or Cmd-click) to pick several. Picking a whole category
+            covers all of its subjects.
+          </p>
+
+          <!-- One slider per pick, shown only once more than one thing is
+               selected -- with a single pick there is nothing to balance. -->
+          <div id="adaptiveWeightsWrap" class="mb-4 hidden">
+            <div class="mb-2 flex items-baseline justify-between">
+              <p class="text-sm font-medium text-[#baa7a1]">How much of each?</p>
+              <button id="resetAdaptiveWeightsBtn" type="button"
+                class="rounded-full bg-[#3e322e] px-3 py-1 text-xs font-bold text-[#efe0db] hover:bg-[#4b3c37]"
+                title="Share the session evenly between the subjects you picked">Reset split</button>
+            </div>
+            <div id="adaptiveWeights" class="space-y-3"></div>
+            <p id="adaptiveWeightTotal" class="mt-2 text-xs font-bold text-green-400">Total: 100%</p>
+          </div>
+
+          <div class="mt-5 flex gap-3">
+            <button id="startAdaptiveSessionBtn" class="rounded-full bg-[#efe0db] px-4 py-2 font-bold text-[#1d1816] disabled:cursor-not-allowed disabled:opacity-40" disabled>Start Session</button>
+          </div>
+          <p id="adaptiveSetupMessage" class="mt-3 text-sm text-[#f6b17a]"></p>
+        </div>
+      </div>
+
+      <!-- =========== Notebook hub =========== -->
+      <div id="notebookHubScreen" class="hidden px-6 py-6">
+        <button data-notebook-back="reader" class="mb-4 rounded-full bg-[#3e322e] px-4 py-2 font-bold">&larr; Back to Quiz</button>
+        <h1 class="mb-2 text-3xl font-bold tracking-tight">Notebook</h1>
+        <p class="mb-6 text-text-muted">Your saved guides, notes, clues and flashcards, by subject.</p>
+        <div id="notebookHubList" class="max-w-3xl space-y-3"></div>
+        <div id="notebookHubEmpty" class="hidden max-w-3xl rounded-lg border border-[#584741] p-5">
+          <p class="text-text-muted">
+            Nothing in the notebook yet. While a tossup is on screen, select any
+            phrase and press <span class="font-bold text-text-light">Save Highlight</span> —
+            saved clues are the raw material a study guide gets built from.
+          </p>
+        </div>
+      </div>
+
+      <!-- =========== Notebook: one shelf =========== -->
+      <div id="notebookDetailScreen" class="hidden px-6 py-6">
+        <div class="mb-6 flex flex-wrap items-center justify-between gap-3">
+          <button data-notebook-back="hub" class="rounded-full bg-[#3e322e] px-4 py-2 font-bold">&larr; Back to Notebook</button>
+          <h1 id="notebookDetailTitle" class="text-2xl font-bold"></h1>
+        </div>
+
+        <!-- One box filters all three columns at once. The lists are already in
+             the DOM, so this hides rows rather than refetching. -->
+        <div class="mb-6">
+          <input id="notebookSearch" type="search" autocomplete="off"
+            placeholder="Search guides, notes, clues and flashcards…"
+            class="w-full rounded-lg border border-[#584741] bg-[#1d1816] p-2 text-white placeholder:text-text-muted focus:border-[#efe0db] focus:outline-none">
+          <p id="notebookSearchCount" class="mt-1 hidden text-xs text-text-muted"></p>
+        </div>
+
+        <div class="grid grid-cols-1 gap-8 lg:grid-cols-5">
+          <!-- Left: guides, notes, clues -->
+          <div class="lg:col-span-2">
+            <div class="mb-4 flex items-center justify-between border-b border-gray-600 pb-2">
+              <h2 class="text-xl font-bold">Study Guides</h2>
+              <!-- Built from every clue saved on this shelf via Save Highlight
+                   while reading -- see routes/ai.py's /api/ai/guide. -->
+              <button id="generateGuideBtn" class="rounded bg-accent-dark px-3 py-1 text-sm font-bold text-white hover:bg-accent-dark-hover" title="Build a guide from your saved clues on this shelf">Generate New Guide</button>
+            </div>
+            <div id="generateGuideStatus" class="hidden mb-3 rounded-lg border border-[#584741] bg-secondary-dark p-3 text-sm text-text-muted"></div>
+
+            <!-- Appears once two or more per-question notes are ticked. -->
+            <div id="mergeBar" class="mb-3 hidden rounded-lg bg-secondary-dark p-3">
+              <div class="flex items-center justify-between gap-2">
+                <span class="text-sm text-text-muted"><span id="mergeCount">0</span> selected</span>
+                <div class="flex items-center gap-2">
+                  <button id="mergeCancelBtn" class="rounded bg-tertiary-dark px-3 py-1 text-sm font-bold">Clear</button>
+                  <button id="mergeNotesBtn" class="rounded bg-sky-600 px-3 py-1 text-sm font-bold text-white hover:bg-sky-700">Merge into guide</button>
+                </div>
+              </div>
+              <label class="mt-2 flex items-center gap-2 text-xs text-text-muted">
+                <input id="mergeDeleteOriginals" type="checkbox" class="h-3.5 w-3.5 accent-sky-500">
+                Delete the originals after merging
+              </label>
+            </div>
+
+            <!-- Guides are split from per-question notes so the ones you
+                 assembled yourself don't get buried under forty of the latter. -->
+            <div id="guidesSection" class="mb-5 hidden">
+              <h3 class="mb-2 text-xs font-bold uppercase tracking-wide text-sky-400">Your Study Guides</h3>
+              <div id="guidesList" class="space-y-2"></div>
+            </div>
+            <div id="notesSection" class="hidden">
+              <h3 class="mb-2 text-xs font-bold uppercase tracking-wide text-text-muted">Question Notes</h3>
+              <div id="notesList" class="space-y-2"></div>
+            </div>
+            <div id="notesEmpty"></div>
+
+            <!-- Saved clues sit under the guides so the connection is visible:
+                 they are what a guide gets built from. -->
+            <div class="mt-8">
+              <div class="mb-4 flex items-center justify-between border-b border-gray-600 pb-2">
+                <h2 class="text-xl font-bold">Saved Clues <span id="clueCount" class="text-sm font-normal text-text-muted"></span></h2>
+                <button id="deleteAllCluesBtn" class="hidden rounded bg-red-600 px-3 py-1 text-sm font-bold text-white hover:bg-red-700">Delete All</button>
+              </div>
+              <div id="cluesList" class="max-h-[40vh] space-y-3 overflow-y-auto p-1"></div>
+            </div>
+          </div>
+
+          <!-- Right: flashcards -->
+          <div class="lg:col-span-3">
+            <div class="mb-4 flex items-center justify-between border-b border-gray-600 pb-2">
+              <h2 class="text-xl font-bold">Flashcards <span id="cardCount" class="text-sm font-normal text-text-muted"></span></h2>
+              <div class="flex items-center gap-2">
+                <button id="addFlashcardBtn" class="rounded bg-green-600 px-3 py-1 text-sm font-bold text-white hover:bg-green-700">+ Add card</button>
+                <button id="deleteAllFlashcardsBtn" class="hidden rounded bg-red-600 px-3 py-1 text-sm font-bold text-white hover:bg-red-700">Delete All</button>
+              </div>
+            </div>
+            <div id="cardsList" class="max-h-[70vh] space-y-4 overflow-y-auto p-1"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- =========== About =========== -->
+      <!-- Kept in the app rather than linked out, the same call the desktop
+           made: you should not need a working connection to read the terms you
+           are agreeing to. The wording is copied from the published pages and
+           has to be updated alongside them. -->
+      <div id="aboutScreen" class="hidden px-6 py-6">
+        <button id="backFromAboutBtn" class="mb-4 rounded-full bg-[#3e322e] px-4 py-2 font-bold">&larr; Back to Quiz</button>
+        <h1 class="mb-2 text-3xl font-bold tracking-tight">About ForgeQB</h1>
+        <p class="mb-6 text-text-muted">Quizbowl practice with spaced repetition and adaptive difficulty.</p>
+
+        <div class="max-w-3xl space-y-4">
+          <details class="rounded-lg bg-secondary-dark p-5" open>
+            <summary class="cursor-pointer select-none text-lg font-bold">Terms of Service</summary>
+            <div class="mt-4 space-y-5 text-sm leading-relaxed text-text-muted">
+              <div>
+                <h3 class="mb-1 font-bold text-text-light">1. Acceptance of Terms</h3>
+                <p>By using ForgeQB, you agree to abide by these basic Terms of Service. If you don't agree with these terms, please do not use our application.</p>
+              </div>
+              <div>
+                <h3 class="mb-1 font-bold text-text-light">2. Acceptable Use</h3>
+                <p class="mb-2">We want ForgeQB to be a helpful, productive studying environment. To maintain this:</p>
+                <ul class="ml-2 list-inside list-disc space-y-1">
+                  <li><span class="font-bold text-text-light">Appropriate Content:</span> Do not write, upload, or create wildly inappropriate, offensive, or malicious content within your flashcards or personal notes. Keep it relevant to studying.</li>
+                  <li><span class="font-bold text-text-light">No Exploits:</span> Do not attempt SQL injection attacks, cross-site scripting (XSS), server-side request forgery, or any other method intended to harm, scrape, or manipulate our infrastructure.</li>
+                </ul>
+              </div>
+              <div>
+                <h3 class="mb-1 font-bold text-text-light">3. Enforcement &amp; Bans</h3>
+                <p>We reserve the right to monitor our systems for abuse. If you are found violating the Acceptable Use policy, specifically by attacking our servers or uploading malicious content, we will permanently ban your account and restrict your access to the service without warning.</p>
+              </div>
+              <div>
+                <h3 class="mb-1 font-bold text-text-light">4. Contact Us</h3>
+                <p>If you have any questions about what is allowed, or if you encounter issues, please reach out to us at <span class="text-amber-400">forge.quizbowl@gmail.com</span>.</p>
+              </div>
+            </div>
+          </details>
+
+          <details class="rounded-lg bg-secondary-dark p-5">
+            <summary class="cursor-pointer select-none text-lg font-bold">Privacy Policy</summary>
+            <div class="mt-4 space-y-5 text-sm leading-relaxed text-text-muted">
+              <div>
+                <h3 class="mb-1 font-bold text-text-light">1. Introduction</h3>
+                <p>This Privacy Policy explains how we collect, use, and protect your information when you use our website and software.</p>
+              </div>
+              <div>
+                <h3 class="mb-1 font-bold text-text-light">2. Information We Collect</h3>
+                <ul class="ml-2 list-inside list-disc space-y-1">
+                  <li><span class="font-bold text-text-light">Google Analytics &amp; Search Console:</span> We use these to monitor website traffic, search queries, and general usage patterns. This helps us optimize our content and improve our reach.</li>
+                  <li><span class="font-bold text-text-light">User Answer Data:</span> Within the ForgeQB application, we store data regarding your quizbowl answers, category strengths, and overall performance metrics.</li>
+                </ul>
+              </div>
+              <div>
+                <h3 class="mb-1 font-bold text-text-light">3. How We Use Your Information</h3>
+                <ul class="ml-2 list-inside list-disc space-y-1">
+                  <li><span class="font-bold text-text-light">Analytics:</span> Website usage data allows us to see how visitors interact with our page, which helps us improve navigation and content.</li>
+                  <li><span class="font-bold text-text-light">Machine Learning &amp; Adaptive Learning:</span> The user answer data collected by the application is stored securely and will be used to train future Machine Learning models, so ForgeQB can identify and target your individual knowledge gaps.</li>
+                </ul>
+              </div>
+              <div>
+                <h3 class="mb-1 font-bold text-text-light">4. Data Storage and Security</h3>
+                <p>We restrict access to your personal performance data. We do not sell your data to third-party advertisers. All collected answer data is safeguarded and used strictly for internal modeling and enhancing the educational value of the application.</p>
+              </div>
+              <div>
+                <h3 class="mb-1 font-bold text-text-light">5. Contact the Desk</h3>
+                <p>If you have any questions or concerns about this privacy policy, please contact us at <span class="text-amber-400">forge.quizbowl@gmail.com</span>.</p>
+              </div>
+            </div>
+          </details>
+
+          <details class="rounded-lg bg-secondary-dark p-5">
+            <summary class="cursor-pointer select-none text-lg font-bold">Keyboard shortcuts</summary>
+            <dl id="shortcutListAbout" class="mt-4 space-y-2 text-sm"></dl>
+          </details>
+        </div>
+      </div>
+
+      <!-- =========== Profile =========== -->
+      <!-- One stat picked at a time, full width, so its chart is legible --
+           the same shape the desktop uses rather than five panels stacked and
+           scrolled past. Progress Over Time sits below the picker on its own:
+           it is the one panel "Reset Stats" does not touch, so folding it into
+           the same picker would wrongly imply it resets too. -->
+      <div id="profileScreen" class="hidden px-6 py-6">
+        <button id="backToReaderBtn" class="mb-4 rounded-full bg-[#3e322e] px-4 py-2 font-bold">&larr; Back to Quiz</button>
+
+        <div class="mb-6 flex flex-wrap items-center justify-between gap-4">
+          <h1 id="profileTitle" class="text-3xl font-bold">Your Profile</h1>
+          <div class="flex flex-wrap items-center gap-3">
+            <label id="profileCategoryLabel" class="text-sm text-[#baa7a1]">Category
+              <select id="profileCategoryFilter"
+                class="ml-2 rounded-lg border border-[#584741] bg-[#1d1816] p-2 text-white focus:border-[#efe0db] focus:outline-none">
+                <option value="">Every category</option>
+              </select>
+            </label>
+            <!-- Hidden under a session filter, alongside the category picker --
+                 resetting the account's lifetime stats is not an action that
+                 makes sense while looking at one saved sitting. -->
+            <button id="resetStatsBtn"
+              class="rounded-full bg-red-700 px-4 py-2 text-sm font-bold text-white hover:bg-red-800">
+              Reset All Stats
+            </button>
+          </div>
+        </div>
+
+        <!-- Shown only when the records page opened this profile scoped to one
+             saved sitting. It says what is being looked at, and what a session
+             cannot answer: a streak belongs to a calendar and a review queue
+             belongs to an account, and neither becomes a fact about one sitting
+             just because it is on screen next to one. -->
+        <div id="profileSessionNotice"
+             class="mb-6 hidden flex-wrap items-center justify-between gap-3 rounded-lg border border-[#584741] bg-secondary-dark p-4">
+          <p id="profileSessionText" class="text-sm"></p>
+          <button id="profileExitSessionBtn" class="rounded-full bg-tertiary-dark px-4 py-2 text-sm font-bold hover:bg-accent-dark">
+            Show my whole profile
+          </button>
+        </div>
+
+        <div class="grid grid-cols-1 gap-8 lg:grid-cols-3">
+          <!-- Left: the constants -- lifetime totals and a written explanation
+               of whichever stat is on the canvas. -->
+          <div class="space-y-6 lg:col-span-1">
+            <div class="rounded-lg bg-secondary-dark p-6">
+              <h2 class="mb-4 text-xl font-bold">Lifetime Stats</h2>
+              <table class="w-full text-left text-sm">
+                <tbody>
+                  <tr><td class="py-1 font-semibold">Tossups Heard</td><td id="profileTossupsHeard" class="text-right">0</td></tr>
+                  <tr><td class="py-1 font-semibold">Total Points</td><td id="profilePoints" class="text-right">0</td></tr>
+                  <tr>
+                    <td class="py-1 font-semibold">Powers / Tens / Negs</td>
+                    <td class="text-right">
+                      <span id="profilePowers" class="text-green-400">0</span> /
+                      <span id="profileTens">0</span> /
+                      <span id="profileNegs" class="text-red-400">0</span>
+                    </td>
+                  </tr>
+                  <tr><td class="py-1 font-semibold">Average Celerity</td><td id="profileCelerity" class="text-right">0.000</td></tr>
+                </tbody>
+              </table>
+            </div>
+
+            <!-- Reads out whichever stat is selected on the right: what it is
+                 and what it says about this player. A chart carries no
+                 explanation of its own, so this is where the finding lives. -->
+            <div class="rounded-lg bg-secondary-dark p-6">
+              <h3 id="statAboutTitle" class="mb-1 text-lg font-bold">About this stat</h3>
+              <p id="statAboutWhat" class="mb-3 text-xs text-text-muted"></p>
+              <p id="statAboutFinding" class="text-sm leading-relaxed"></p>
+            </div>
+          </div>
+
+          <!-- Right: the picker and one stat view. -->
+          <div class="lg:col-span-2">
+            <div id="statPicker" class="mb-4 flex flex-wrap gap-2"></div>
+            <div id="statView" class="min-h-[420px] rounded-lg bg-secondary-dark p-6"></div>
+          </div>
+        </div>
+
+        <!-- Kept out of the picker deliberately -- see the comment above. -->
+        <div id="progressSection" class="mt-8 border-t border-[#584741] pt-6">
+          <div class="mb-1 flex flex-wrap items-baseline justify-between gap-2">
+            <h3 class="text-xl font-bold">Progress Over Time</h3>
+            <span class="text-xs text-text-muted">Kept when you reset your stats</span>
+          </div>
+          <div id="progressNav" class="mb-3 flex items-center gap-3 text-sm"></div>
+          <div id="progressView" class="rounded-lg bg-secondary-dark p-6"></div>
+        </div>
+      </div>
+
+      <!-- =========== Records =========== -->
+      <!-- Every Adaptive Learning sitting saved with "Save and Quit".
+           `category_user_state` only ever holds the *latest* skill per subject,
+           so these rows are the only history there is -- which is why the page
+           reads them rather than re-deriving anything. -->
+      <div id="recordsScreen" class="hidden px-6 py-6">
+        <button id="backFromRecordsBtn" class="mb-4 rounded-full bg-[#3e322e] px-4 py-2 font-bold">&larr; Back to Quiz</button>
+        <h1 class="mb-2 text-3xl font-bold tracking-tight">Records</h1>
+        <p class="mb-6 text-text-muted">Every Adaptive Learning session you have saved.</p>
+
+        <div id="recordsSummary" class="mb-6 grid grid-cols-2 gap-3 md:grid-cols-4"></div>
+
+        <div class="mb-4 flex flex-wrap items-center gap-3">
+          <label for="recordsCategoryFilter" class="text-sm text-text-muted">Category</label>
+          <select id="recordsCategoryFilter"
+            class="rounded-lg border border-[#584741] bg-[#1d1816] p-2 text-white focus:border-[#efe0db] focus:outline-none">
+            <option value="all">All categories</option>
+          </select>
+        </div>
+
+        <div id="recordsList" class="space-y-2"></div>
+        <div id="recordsPaging" class="mt-4 flex items-center justify-between"></div>
+      </div>
+
+      <!-- =========== Review list =========== -->
+      <!-- Every question in the review queue, browsable rather than only
+           drillable. `GET /api/review/queue` has served this since the queue
+           itself was built; this is the first page that renders it. -->
+      <div id="reviewListScreen" class="hidden px-6 py-6">
+        <button id="backFromReviewListBtn" class="mb-4 rounded-full bg-[#3e322e] px-4 py-2 font-bold">&larr; Back to Quiz</button>
+        <h1 class="mb-2 text-3xl font-bold tracking-tight">Missed Questions</h1>
+        <p class="mb-6 text-text-muted">Everything you have gotten wrong, until you relearn it.</p>
+
+        <div id="reviewListSummary" class="mb-6 grid grid-cols-2 gap-3 md:grid-cols-4"></div>
+
+        <div class="mb-4 flex flex-wrap items-center gap-3">
+          <div id="reviewListStatusTabs" class="flex flex-wrap gap-2"></div>
+          <label for="reviewListCategoryFilter" class="ml-auto text-sm text-text-muted">Category</label>
+          <select id="reviewListCategoryFilter"
+            class="rounded-lg border border-[#584741] bg-[#1d1816] p-2 text-white focus:border-[#efe0db] focus:outline-none">
+            <option value="all">All categories</option>
+          </select>
+        </div>
+
+        <div id="reviewListList" class="space-y-2"></div>
+        <div id="reviewListPaging" class="mt-4 flex items-center justify-between"></div>
+      </div>
+    </div>
+
+    <!-- =========== Review settings =========== -->
+    <!-- Its own panel rather than a section of Settings, following the desktop:
+         these are the numbers you change while studying, not once at setup.
+         The four counts at the top are why it opens as a panel at all -- the
+         thresholds mean nothing without the queue they are describing. -->
+    <div id="reviewSettingsModal" class="hidden fixed inset-0 z-50 items-center justify-center bg-black bg-opacity-60 p-8">
+      <div class="max-h-[85vh] w-full max-w-md overflow-y-auto rounded-lg bg-secondary-dark p-6 shadow-xl">
+        <h2 class="text-xl font-bold">Review Missed</h2>
+        <p class="mt-1 text-sm text-text-muted">Questions you get wrong come back here until you relearn them.</p>
+
+        <div class="mt-4 grid grid-cols-4 gap-3 text-center">
+          <!-- Due now is the one to act on: spaced repetition schedules each
+               question for a particular day, and these are today's. -->
+          <div class="rounded-lg bg-tertiary-dark p-3">
+            <div id="reviewDueCount" class="text-2xl font-bold text-[#f6b17a]">0</div>
+            <div class="text-xs text-text-muted">Due now</div>
+          </div>
+          <div class="rounded-lg bg-tertiary-dark p-3">
+            <div id="reviewToReviewCount" class="text-2xl font-bold">0</div>
+            <div class="text-xs text-text-muted">To review</div>
+          </div>
+          <div class="rounded-lg bg-tertiary-dark p-3">
+            <div id="reviewLearnedCount" class="text-2xl font-bold text-green-400">0</div>
+            <div class="text-xs text-text-muted">Learned</div>
+          </div>
+          <div class="rounded-lg bg-tertiary-dark p-3">
+            <div id="reviewStuckCount" class="text-2xl font-bold text-amber-400">0</div>
+            <div class="text-xs text-text-muted">Stuck</div>
+          </div>
+        </div>
+
+        <h3 class="mt-5 text-sm font-bold text-gray-300">When is a question Learned?</h3>
+        <div class="mt-2 flex flex-wrap gap-6">
+          <label class="text-sm text-gray-300">Correct answers in a row needed
+            <input type="number" id="learnedCountInput" min="1" value="2"
+                   class="mt-1 block w-24 rounded-md bg-tertiary-dark p-2">
+          </label>
+          <!-- No upper limit: if someone wants a question to need a thousand
+               misses before it is called stuck, that is their call. -->
+          <label class="text-sm text-gray-300">A question is stuck after
+            <input type="number" id="stuckCountInput" min="1" value="3"
+                   class="mt-1 block w-24 rounded-md bg-tertiary-dark p-2">
+          </label>
+        </div>
+
+        <!-- How much of the tossup may be read before the buzz stops counting
+             toward Learned. The stored setting is the fraction still *unread*
+             at the buzz; the slider asks it the other way round, because
+             "buzz within the first three quarters" is the sentence a player
+             thinks in. reviewSettings.js converts between the two. -->
+        <label class="mt-4 block text-sm text-gray-300" for="learnedTimingRange">Buzz within the first
+          <span id="learnedTimingDisplay" class="font-bold text-white">75%</span> of the question
+        </label>
+        <input id="learnedTimingRange" type="range" min="10" max="100" step="5" value="75"
+               class="mt-2 h-2 w-full cursor-pointer appearance-none rounded-lg bg-[#584741]">
+        <div class="flex justify-between text-xs text-text-muted opacity-70">
+          <span>Buzz early</span><span>Any time</span>
+        </div>
+
+        <p id="reviewSettingsMessage" class="mt-4 text-sm text-[#f6b17a]"></p>
+
+        <div class="mt-4 flex flex-wrap items-center gap-2">
+          <button id="openReviewListBtn" class="rounded bg-tertiary-dark px-4 py-2 font-bold hover:bg-accent-dark">See all missed questions</button>
+          <button id="startReviewFromSettingsBtn" class="rounded-full bg-amber-700 px-4 py-2 font-bold text-white hover:bg-amber-800">Start reviewing</button>
+          <button id="closeReviewSettingsBtn" class="ml-auto rounded bg-gray-600 px-4 py-2 font-bold hover:bg-gray-700">Cancel</button>
+          <button id="saveReviewSettingsBtn" class="rounded bg-sky-600 px-4 py-2 font-bold text-white hover:bg-sky-700">Save</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- =========== Reset stats confirmation =========== -->
+    <!-- Its own modal, not a plain confirm() -- the thing being agreed to
+         needs saying precisely: everything the reset touches, and everything
+         it deliberately leaves alone, because "reset my stats" is genuinely
+         ambiguous about the review queue and the notebook. -->
+    <div id="resetStatsModal" class="hidden fixed inset-0 z-50 items-center justify-center bg-black bg-opacity-60 p-8">
+      <div class="w-full max-w-md rounded-lg bg-secondary-dark p-6 shadow-xl">
+        <h2 class="text-xl font-bold">Reset All Stats?</h2>
+        <p class="mt-3 text-sm text-text-muted">
+          This clears your lifetime totals, powers/tens/negs, and every chart
+          built from them. It cannot be undone.
+        </p>
+        <p class="mt-3 text-sm text-text-muted">
+          Your <span class="font-semibold text-text-light">Progress Over Time</span>
+          history, your <span class="font-semibold text-text-light">review
+          queue</span> and <span class="font-semibold text-text-light">notebook</span>,
+          and your <span class="font-semibold text-text-light">Adaptive Learning</span>
+          skill levels are not touched.
+        </p>
+        <p id="resetStatsMessage" class="mt-3 text-sm text-[#f6b17a]"></p>
+        <div class="mt-5 flex items-center gap-2">
+          <button id="confirmResetStatsBtn" class="rounded-full bg-red-700 px-4 py-2 font-bold text-white hover:bg-red-800">
+            Yes, reset my stats
+          </button>
+          <button id="cancelResetStatsBtn" class="ml-auto rounded bg-gray-600 px-4 py-2 font-bold hover:bg-gray-700">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- =========== Settings modal =========== -->
+    <!-- z-50 like every other modal. The desktop shipped this one at
+         z-index auto for a while and the page's positioned cards painted
+         straight through it. -->
+    <div id="settingsModal" class="hidden fixed inset-0 z-50 items-center justify-center bg-black bg-opacity-60 p-8">
+      <div class="max-h-[85vh] w-full max-w-lg overflow-y-auto rounded-lg bg-primary-dark p-6 shadow-xl">
+        <h2 class="mb-4 text-2xl font-bold">Settings</h2>
+
+        <!-- App-wide, so it lives here rather than beside the reader controls.
+             Scales the whole interface rather than only the tossup: every size
+             in the app is in rem, which is relative to this, so text and the
+             spacing around it grow together instead of text overflowing boxes
+             that stayed put. Applied live while dragging and saved
+             immediately, since a font size you cannot see until you press Save
+             is a guess. -->
+        <div class="mb-4">
+          <label for="fontSizeRange" class="block text-sm font-medium text-gray-300">
+            Font size: <span id="fontSizeDisplay" class="font-bold">16px</span>
+          </label>
+          <input id="fontSizeRange" type="range" min="12" max="22" step="1" value="16"
+                 class="mt-2 h-2 w-full cursor-pointer appearance-none rounded-lg bg-[#584741]">
+          <div class="flex justify-between text-xs text-text-muted opacity-70"><span>Smaller</span><span>Larger</span></div>
+          <button id="fontSizeResetBtn" class="mt-2 text-xs text-text-muted underline hover:text-white">Reset to default</button>
+        </div>
+
+        <div class="mb-4 border-t border-[#584741] pt-4">
+          <label class="flex cursor-pointer items-center gap-2 text-sm font-medium text-gray-300">
+            <input id="shortcutsToggle" type="checkbox" class="h-4 w-4 cursor-pointer accent-[#efe0db]" checked>
+            Keyboard shortcuts
+          </label>
+          <details class="mt-2">
+            <summary class="cursor-pointer select-none text-xs text-text-muted hover:text-white">Show the list</summary>
+            <dl id="shortcutListSettings" class="mt-2 space-y-1.5 border-l border-[#584741] pl-3"></dl>
+          </details>
+        </div>
+
+        <!-- Each account brings its own Gemini key, the same model the
+             desktop build uses -- see web/api/ai.py and web/api/secrets_store.py
+             for why. Saved server-side, encrypted, and never echoed back in
+             the clear: the box below only ever shows a hint of what's saved,
+             never the key itself. -->
+        <div class="mb-4 border-t border-[#584741] pt-4">
+          <label class="block text-sm font-medium text-gray-300">Gemini API key</label>
+          <p class="mt-1 text-xs text-text-muted">
+            Needed for AI explanations, study guides, flashcards, and the
+            Knowledge Depth panel. Get a free key at
+            <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener"
+               class="underline hover:text-white">aistudio.google.com/apikey</a>.
+          </p>
+          <p id="aiKeyStatus" class="mt-2 text-xs text-text-muted"></p>
+          <div class="mt-2 flex items-center gap-2">
+            <input id="aiKeyInput" type="password" placeholder="Paste your Gemini API key"
+                   autocomplete="off"
+                   class="flex-1 rounded-lg border border-[#584741] bg-[#1d1816] p-2 text-sm focus:border-[#efe0db] focus:outline-none">
+            <button id="saveAiKeyBtn" class="shrink-0 rounded-full bg-sky-600 px-3 py-2 text-sm font-bold hover:bg-sky-700 disabled:opacity-50">Save</button>
+          </div>
+          <button id="removeAiKeyBtn" class="mt-2 hidden text-xs text-red-400 underline hover:text-red-300">Remove saved key</button>
+          <p id="aiKeyMessage" class="mt-2 text-xs"></p>
+        </div>
+
+        <div class="flex justify-end">
+          <button id="closeSettingsBtn" class="rounded-md bg-accent-dark px-4 py-2 font-bold hover:bg-[#6b5a52]">Done</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- =========== Note viewer =========== -->
+    <div id="noteViewerModal" class="hidden fixed inset-0 z-50 items-center justify-center bg-black bg-opacity-70 p-8">
+      <div class="relative flex h-[80vh] w-full max-w-4xl flex-col rounded-lg bg-secondary-dark p-6 shadow-xl">
+        <h1 id="modalNoteTitle" class="pr-24 text-3xl font-bold"></h1>
+        <p id="modalNoteSubtitle" class="mt-1 hidden text-sm uppercase tracking-wide text-text-muted"></p>
+        <div class="mb-5 mt-4 border-b border-gray-600"></div>
+
+        <!-- The rendered guide, and the raw markdown behind it. Editing swaps
+             one for the other rather than opening a second dialog, so what you
+             are changing is visibly the thing you were just reading. -->
+        <div id="modalNoteContent" class="guide flex-grow overflow-y-auto"></div>
+        <textarea id="modalNoteEditor"
+          class="hidden flex-grow resize-none overflow-y-auto rounded-lg border border-[#584741] bg-[#1d1816] p-3 font-mono text-sm focus:border-[#efe0db] focus:outline-none"></textarea>
+
+        <button id="closeNoteViewerBtn" class="absolute right-4 top-4 rounded-full bg-gray-600 px-3 py-1 font-bold hover:bg-gray-700">Close</button>
+        <div class="mt-4 flex items-center justify-end gap-2 border-t border-gray-600 pt-4">
+          <span id="noteEditStatus" class="mr-auto text-sm text-text-muted"></span>
+          <button id="editNoteBtn" class="rounded-full bg-sky-600 px-4 py-2 font-bold hover:bg-sky-700" title="Edit this note">Edit</button>
+          <button id="saveNoteChangesBtn" class="hidden rounded-full bg-emerald-600 px-4 py-2 font-bold hover:bg-emerald-700">Save Changes</button>
+          <button id="cancelNoteEditBtn" class="hidden rounded-full bg-gray-600 px-4 py-2 font-bold hover:bg-gray-700">Cancel</button>
+          <button id="deleteNoteBtn" class="rounded-full bg-red-700 px-4 py-2 font-bold hover:bg-red-800">Delete</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- =========== Guide naming =========== -->
+    <div id="guideNameModal" class="hidden fixed inset-0 z-50 items-center justify-center bg-black bg-opacity-60 p-8">
+      <div class="w-full max-w-md rounded-lg bg-secondary-dark p-6 shadow-xl">
+        <h2 id="guideNameHeading" class="text-lg font-bold">What do you want to name it?</h2>
+        <p id="guideNameSubtitle" class="mt-1 text-sm text-text-muted"></p>
+
+        <!-- Guides grow: the same notes can start a new guide or join one that
+             already exists. Hidden entirely when there are none yet. -->
+        <div id="guideTargetWrap" class="mt-4 hidden">
+          <label class="block text-xs font-bold uppercase tracking-wide text-text-muted">Add to</label>
+          <select id="guideTargetSelect"
+                  class="mt-1 w-full rounded bg-tertiary-dark px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-sky-500">
+            <option value="__new__">➕ A new guide…</option>
+          </select>
+        </div>
+
+        <input id="guideNameInput" type="text" maxlength="120" autocomplete="off"
+               placeholder="e.g. Famous Battles and Rivers"
+               class="mt-4 w-full rounded bg-tertiary-dark px-3 py-2 text-white placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-sky-500">
+        <p id="guideNameError" class="mt-2 hidden text-sm text-red-400"></p>
+        <div class="mt-5 flex justify-end gap-2">
+          <button id="guideNameCancelBtn" class="rounded bg-gray-600 px-4 py-2 font-bold hover:bg-gray-700">Cancel</button>
+          <button id="guideNameConfirmBtn" class="rounded bg-sky-600 px-4 py-2 font-bold text-white hover:bg-sky-700">Create Guide</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Shortcut confirmation. A shortcut fires with no click and no cursor
+         near the thing it triggered, so an action with no visible result would
+         otherwise give no feedback at all. -->
+    <div id="shortcutToast"
+         class="fixed bottom-6 left-1/2 z-[60] hidden -translate-x-1/2 rounded-full border border-[#584741] bg-secondary-dark px-4 py-2 text-sm font-bold text-text-light shadow-lg"></div>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

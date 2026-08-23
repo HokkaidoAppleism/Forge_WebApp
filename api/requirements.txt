@@ -1,0 +1,19 @@
+flask>=3.1
+flask-cors>=6.0
+psycopg[binary]>=3.2
+psycopg-pool>=3.2
+pyjwt[crypto]>=2.9
+python-dotenv>=1.0
+requests>=2.32
+gunicorn>=23.0
+
+# Adaptive Learning imports forge_backend/rec_logic, which is numpy. Nothing
+# else from the desktop backend is pulled in -- see web/api/adaptive.py.
+numpy>=2.0
+
+# The AI features import forge_backend/geminiGetter.py directly (see
+# web/api/ai.py) -- the same reuse-not-copy choice adaptive.py already makes.
+# google-genai is what geminiGetter itself needs; cryptography is what
+# secrets_store.py uses to encrypt each account's own Gemini key at rest.
+google-genai>=1.0
+cryptography>=42
