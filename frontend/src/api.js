@@ -102,6 +102,12 @@ export const api = {
 
   randomQuestion: (filters) => call('/api/questions/random', { params: filters }),
 
+  // The whole set with review status attached -- see routes/questions.py's
+  // `browse`. Empty params are dropped by `call`, so an unfiltered browse
+  // sends none of them.
+  browseQuestions: ({ page, status, q, category }) =>
+    call('/api/questions/browse', { params: { page, status, q, category } }),
+
   submitAnswer: (answer) =>
     call('/api/answers', { method: 'POST', body: { ...answer, timezone } }),
 

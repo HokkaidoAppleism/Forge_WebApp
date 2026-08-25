@@ -57,6 +57,9 @@
           <button id="recordsBtn" class="flex h-10 w-10 items-center justify-center rounded-full bg-[#3e322e] hover:bg-[#584741]" title="Adaptive Learning Records">
             <svg xmlns="http://www.w3.org/2000/svg" class="size-5" viewBox="0 0 24 24" fill="currentColor"><path d="M5 3h12a2 2 0 0 1 2 2v16l-4-2-4 2-4-2-4 2V5a2 2 0 0 1 2-2zm2 4v2h8V7H7zm0 4v2h8v-2H7z"/></svg>
           </button>
+          <button id="browseBtn" class="flex h-10 w-10 items-center justify-center rounded-full bg-[#3e322e] hover:bg-[#584741]" title="Browse all questions">
+            <svg xmlns="http://www.w3.org/2000/svg" class="size-5" viewBox="0 0 24 24" fill="currentColor"><path d="M15.5 14h-.79l-.28-.27A6.47 6.47 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
+          </button>
           <button id="reviewSettingsBtn" class="flex h-10 w-10 items-center justify-center rounded-full bg-[#3e322e] hover:bg-[#584741]" title="Review Missed settings">
             <svg xmlns="http://www.w3.org/2000/svg" class="size-5" viewBox="0 0 24 24" fill="currentColor"><path d="M12 5V1L7 6l5 5V7a6 6 0 1 1-6 6H4a8 8 0 1 0 8-8z"/></svg>
           </button>
@@ -654,6 +657,34 @@
 
         <div id="reviewListList" class="space-y-2"></div>
         <div id="reviewListPaging" class="mt-4 flex items-center justify-between"></div>
+      </div>
+
+      <!-- =========== Browse all questions =========== -->
+      <!-- The counterpart to Missed Questions: that page is what you got
+           wrong, this is the whole set, so the 169k questions read as a
+           library rather than a list of failures. Ported from the desktop's
+           own "Browse All Questions" section. -->
+      <div id="browseScreen" class="hidden px-6 py-6">
+        <button id="backFromBrowseBtn" class="mb-4 rounded-full bg-[#3e322e] px-4 py-2 font-bold">&larr; Back to Quiz</button>
+        <h1 class="mb-2 text-3xl font-bold tracking-tight">Browse Questions</h1>
+        <p class="mb-6 text-text-muted">Every question in the set, with where you stand on it.</p>
+
+        <div class="mb-4 flex flex-wrap items-center gap-3">
+          <div id="browseStatusTabs" class="flex flex-wrap gap-2"></div>
+          <div class="ml-auto flex flex-wrap items-center gap-2">
+            <label for="browseCategoryFilter" class="text-sm text-text-muted">Category</label>
+            <select id="browseCategoryFilter"
+              class="rounded-lg border border-[#584741] bg-[#1d1816] p-2 text-white focus:border-[#efe0db] focus:outline-none">
+              <option value="all">All categories</option>
+            </select>
+            <input id="browseSearch" type="search" placeholder="Search answers…"
+              class="w-56 rounded-lg border border-[#584741] bg-[#1d1816] p-2 text-white placeholder:text-text-muted focus:border-[#efe0db] focus:outline-none">
+          </div>
+        </div>
+        <p id="browseSearchNote" class="mb-4 hidden text-xs text-[#f6b17a]"></p>
+
+        <div id="browseList" class="space-y-2"></div>
+        <div id="browsePaging" class="mt-4 flex items-center justify-between"></div>
       </div>
     </div>
 

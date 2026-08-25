@@ -5,6 +5,7 @@ import { initNotebook } from './notebook.js'
 import { initRecords } from './records.js'
 import { initReviewSettings } from './reviewSettings.js'
 import { initReviewList } from './reviewList.js'
+import { initBrowse } from './browse.js'
 import { initAiSettings } from './aiSettings.js'
 import { initAccountSettings } from './accountSettings.js'
 import { renderMarkdown } from './markdown.js'
@@ -22,6 +23,7 @@ const el = {
   notebookHubScreen: $('notebookHubScreen'),
   notebookDetailScreen: $('notebookDetailScreen'),
   recordsScreen: $('recordsScreen'), reviewListScreen: $('reviewListScreen'),
+  browseScreen: $('browseScreen'), browseBtn: $('browseBtn'),
   profileBtn: $('profileBtn'), backToReaderBtn: $('backToReaderBtn'),
   aboutBtn: $('aboutBtn'), backFromAboutBtn: $('backFromAboutBtn'),
   notebookBtn: $('notebookBtn'), saveHighlightBtn: $('saveHighlightBtn'),
@@ -125,6 +127,17 @@ let filters = []        // the category tree from /api/questions/filters
 let adaptive = null
 let adaptiveCatalogue = null
 
+// Declared up here with the rest of the state, not beside the code that uses
+// them, and that placement is load-bearing: `onAuthStateChange` below fires
+// during module evaluation (Supabase emits INITIAL_SESSION as soon as it is
+// registered), and its handler reaches both `updateWhoami` -> signedInEmail
+// and `abandonTossup` -> stopCountdown -> countdownInterval. A `let` further
+// down the file is still in its temporal dead zone at that moment, so the
+// handler threw "Cannot access 'signedInEmail' before initialization" and
+// took the rest of the sign-in path with it.
+let signedInEmail = ''
+let countdownInterval = null
+
 // -------------------------------------------------------------------- auth --
 
 el.authForm.addEventListener('submit', async (event) => {
@@ -182,6 +195,7 @@ const showProfile = initProfile(el)
 const SCREENS = [
   'readerScreen', 'profileScreen', 'aboutScreen', 'adaptiveSetupScreen',
   'notebookHubScreen', 'notebookDetailScreen', 'recordsScreen', 'reviewListScreen',
+  'browseScreen',
 ]
 
 /** Show exactly one screen. Leaving a tossup half-read to look at something
@@ -224,14 +238,19 @@ el.recordsBtn.addEventListener('click', () => {
 })
 
 const showReviewList = initReviewList({ onBack: openReader })
+const showBrowse = initBrowse({ onBack: openReader })
+
+el.browseBtn.addEventListener('click', () => {
+  showScreen('browseScreen')
+  showBrowse()
+})
 
 const loadAiKeyStatus = initAiSettings()
 
 // The header falls back to the email until a username comes back, rather
 // than waiting on the request -- a signed-in header that is blank for a
-// moment reads as broken. Also what a cleared username falls back to, since
-// Settings only knows the new username, not the account's email.
-let signedInEmail = ''
+// moment reads as broken. `signedInEmail` itself is declared with the other
+// state at the top of the file; see the note there for why.
 
 function updateWhoami(fallbackEmail) {
   el.whoami.textContent = fallbackEmail
@@ -527,7 +546,8 @@ function speakCurrentTossup(startIndex = 0) {
 
 // ---------------------------------------------------------------- countdown --
 
-let countdownInterval = null
+// `countdownInterval` itself is declared with the other state at the top of
+// the file rather than here; see the note there for why.
 
 function stopCountdown() {
   clearInterval(countdownInterval)
