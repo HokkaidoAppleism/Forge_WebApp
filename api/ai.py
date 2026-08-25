@@ -12,29 +12,24 @@ account that asked. Nothing about the caller's identity is passed in from the
 request body: the key is looked up by `g.user_id`, which comes from the
 verified token, exactly like every other resource in this API.
 
-The prompts, retry policy, JSON parsing and error wording are all reused from
-`forge_backend/geminiGetter.py` unmodified rather than copied -- the same
-choice `adaptive.py` makes with the recommender, and for the same reason: two
-copies of a prompt set is two prompt sets that drift.
+The prompts, retry policy, JSON parsing and error wording used to be reused
+from `forge_backend/geminiGetter.py` unmodified; that file is now a vendored
+copy (`web/api/geminiGetter.py`) for the same reason `rec_logic/` is -- see
+adaptive.py's module docstring. Same drift risk, same mitigation (check here
+by hand if the desktop's version changes).
+
+Importing geminiGetter has one side effect worth knowing about: it creates
+an app-data directory (`~/.config/ForgeQB` on Linux) at import time. Empty
+and harmless on a server, but it is a real mkdir, not nothing.
 """
 
 import json
-import os
 import re
-import sys
 import traceback
 
-# Same path setup adaptive.py uses, so both reach forge_backend the same way.
-# Importing geminiGetter has one side effect worth knowing about: it creates
-# the desktop's app-data directory (%APPDATA%\ForgeQB) at import time. Empty
-# and harmless on a server, but it is a real mkdir, not nothing.
-_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-if _REPO_ROOT not in sys.path:
-    sys.path.insert(0, _REPO_ROOT)
+from geminiGetter import AIError, GeminiGetter
 
-from forge_backend.geminiGetter import AIError, GeminiGetter  # noqa: E402
-
-import secrets_store  # noqa: E402
+import secrets_store
 
 
 class NoKeyConfigured(Exception):

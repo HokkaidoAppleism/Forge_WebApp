@@ -1,14 +1,26 @@
 """Adaptive Learning without a session in memory.
 
-The recommender and the skill model are imported from `forge_backend`
-unchanged -- `rec_logic/recommender.py` and `rec_logic/user.py` pull in nothing
-but numpy and the standard library, so there is no reason to copy them the way
-`answerline.py` had to be copied. One implementation, and the web and desktop
-builds cannot drift apart on the maths.
+The recommender and the skill model used to be imported from `forge_backend`
+unchanged, since `rec_logic/recommender.py` and `rec_logic/user.py` pull in
+nothing but numpy and the standard library and there was no reason to copy
+them the way `answerline.py` had to be copied -- one implementation, and the
+web and desktop builds could not drift apart on the maths.
 
-What is rewritten is the part around them: where the model lives between
-questions. See 0003_adaptive_state.sql for why the desktop's in-memory dict
-cannot survive a web server, and what had to start being written down.
+**That stopped being true once `web/` got deployed on its own.** `web/`
+lives at its own git remote (`Forge_WebApp`), separate from `Forge_Group`
+(see NEXT_SESSION_PROMPT.md) -- a production host cloning `Forge_WebApp`
+alone has no `forge_backend/` sibling to reach for. `rec_logic/` here is
+now a vendored copy (`web/api/rec_logic/`), the same accepted tradeoff
+`answerline.py` already made: **if the scoring/skill maths in
+`forge_backend/rec_logic/` ever changes, this copy needs the same change
+made by hand, or the two builds' skill models drift.** Worth checking
+whenever that code moves; not otherwise different from the answerline.py
+situation this file used to point at as the thing it was avoiding.
+
+What is rewritten from the desktop's version is the part around them: where
+the model lives between questions. See 0003_adaptive_state.sql for why the
+desktop's in-memory dict cannot survive a web server, and what had to start
+being written down.
 
 The shape here is:
 
@@ -21,16 +33,9 @@ that follows it cannot half-commit.
 """
 
 import json
-import os
-import sys
 
-# forge_backend is a sibling of web/, not an installed package.
-_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-if _REPO_ROOT not in sys.path:
-    sys.path.insert(0, _REPO_ROOT)
-
-from forge_backend.rec_logic.recommender import recommender  # noqa: E402
-from forge_backend.rec_logic.user import user as UserModel    # noqa: E402
+from rec_logic.recommender import recommender
+from rec_logic.user import user as UserModel
 
 MAX_RETRIES = 5
 DEFAULT_SKILL = 5.0
