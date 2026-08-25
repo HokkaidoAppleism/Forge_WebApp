@@ -51,8 +51,12 @@ currently hold exactly Aaron's one real account. **Keep that true.**
     Knowledge Depth's cluster naming.
 11. Export — flashcards as CSV (Anki-importable as-is), guides and notes as
     one Markdown document, whole-shelf or selected-subset for both.
+12. **Voice Mode** — reads the tossup aloud via the Web Speech API instead of
+    revealing it word by word. No server-side component at all; ported into
+    `web/frontend/src/voice.js`. Landed this session alongside Knowledge
+    Depth — see below.
 
-### Knowledge Depth, this session's work
+### Knowledge Depth, from an earlier session this handoff still covers
 
 `GET /api/stats/knowledge-depth` surfaces the recommender's own per-cluster
 skill rating (`category_user_state.user_data`) with AI-generated topic names.
@@ -75,6 +79,27 @@ to a real cluster. A throwaway test account with no Gemini key will still see
 real AI-named labels for any cluster someone else has already named for real.
 That is correct behaviour, not test pollution — don't "fix" it by clearing
 `cluster_labels`, which would erase other players' real, paid-for names.
+
+### Voice Mode
+
+`web/frontend/src/voice.js`, ported from `electron-app/renderer.js`'s Voice
+Mode wholesale -- pure Web Speech API, no backend involved. Reads the tossup
+aloud (`speechSynthesis`) instead of revealing it word by word; `main.js`
+still owns `wordIndex`/`words`, `voice.js` just reports position back through
+callbacks (`onWord`/`onEnd`/`onError`/`onFallback`) rather than reaching into
+globals the way the desktop version does. Full writeup, including why
+`tick()` is now also the fallback ticker Voice Mode uses on platforms that
+never fire `onboundary`, in CHANGES.md §5 under "Voice Mode" — **read it
+before touching `tick()`, `buzz()`, `abandonTossup()`, or the pause handler
+in `main.js`, all four of which Voice Mode now hooks into.**
+
+Worth knowing before testing it here: this dev environment's headless
+Chromium has `speechSynthesis` but never fires `onboundary`, so every
+verification run here exercised the **fallback** path (`onFallback` →
+estimate position with the timer while audio keeps "playing"), not the
+primary `onboundary`-driven one. Both are real code paths in `voice.js` and
+both matter, but only one has had a live check on this machine — worth a
+real device/browser with actual TTS if that distinction ever needs settling.
 
 **Not done:** picking somewhere to actually deploy. That is the only item
 left on this port.
@@ -181,9 +206,10 @@ Not blocking, not forgotten:
    added when it was first pushed). It is a second, independent `.git` nested inside
    this checkout; `git add`/`git status` run from `Forge_Group`'s own root do not see
    into it, and vice versa. Push there (`cd web && git push`) when `web/`-only work is
-   ready to share, not through the outer repo. **Not yet pushed as of this
-   session's Knowledge Depth work** — the export-feature commit is up there,
-   this one isn't.
+   ready to share, not through the outer repo. Export and Knowledge Depth are
+   pushed as of this handoff (`c713866`); **check `git log` / `git status` in
+   `web/` before assuming Voice Mode is too** — check before trusting a claim,
+   including this one, per the top of this file.
 
 ## Things not to re-litigate
 
@@ -215,3 +241,6 @@ Not blocking, not forgotten:
   "Knowledge Depth" above and in CHANGES.md §5 before adding either — the
   insert-only design is specifically what the no-fallback-caching choice
   makes safe.
+- **Voice Mode is client-only, and stays that way.** It's the Web Speech API
+  reading text the browser already has; there is nothing for a server to do.
+  Don't go looking for a Voice Mode route or table that doesn't exist.

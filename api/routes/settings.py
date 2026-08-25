@@ -53,6 +53,48 @@ def write_review():
     return jsonify({"saved": True, **settings})
 
 
+@bp.get("/username")
+@require_user
+def read_username():
+    with db.user_tx(g.user_id) as conn:
+        row = conn.execute(
+            "select value from public.user_settings "
+            "where user_id = %s and key = 'username'", (g.user_id,)).fetchone()
+    return jsonify({"username": row["value"] if row else None})
+
+
+@bp.post("/username")
+@require_user
+def write_username():
+    """Set or clear the display name shown instead of the account's email.
+
+    An empty name clears it rather than storing one -- there is no "unset"
+    value for a text column, and a stray empty-string row would still read as
+    "has a username" to `read_username` above.
+    """
+    payload = request.get_json(silent=True) or {}
+    username = (payload.get("username") or "").strip()
+    if len(username) > 32:
+        return jsonify({"error": "Usernames are at most 32 characters."}), 400
+    if any(ord(c) < 32 for c in username):
+        return jsonify({"error": "Usernames can't contain control characters."}), 400
+
+    with db.user_tx(g.user_id) as conn:
+        if username:
+            conn.execute(
+                """insert into public.user_settings (user_id, key, value)
+                   values (%s, 'username', %s)
+                   on conflict (user_id, key)
+                   do update set value = excluded.value, updated_at = now()""",
+                (g.user_id, username))
+        else:
+            conn.execute(
+                "delete from public.user_settings "
+                "where user_id = %s and key = 'username'", (g.user_id,))
+
+    return jsonify({"username": username or None})
+
+
 @bp.get("/ai-key")
 @require_user
 def read_ai_key():

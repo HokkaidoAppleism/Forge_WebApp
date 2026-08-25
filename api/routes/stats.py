@@ -506,3 +506,178 @@ def reset():
         "message": "Your statistics have been reset. Your progress history, "
                    "review queue and notes are kept.",
     })
+
+
+# ----------------------------------------------------------------------------
+# Four more panels, desktop-only. The five above match what the web client's
+# own Profile page shows; the desktop build has always shown four more that
+# the web port never got (`forge_backend/stats_manager.py`'s
+# `get_points_per_category_chart`, `get_aggressive_play_analysis`,
+# `get_buzz_spread_chart`, `get_submission_time_chart`). Added here, following
+# the same conventions as the five above -- Postgres aggregation, one round
+# trip, `_answer_scope()` -- so the desktop backend
+# (`forge_backend/cloud.py`) can proxy to these instead of querying local
+# SQLite, the same migration every other desktop route has already gone
+# through. See NEXT_SESSION_PROMPT_DESKTOP_CLOUD.md's stats/profile section.
+# ----------------------------------------------------------------------------
+
+@bp.get("/played-categories")
+@require_user
+def played_categories():
+    """What the profile's own category filter should offer -- every category
+    and subcategory this account has actually answered a question in, with a
+    count, at both levels.
+
+    Desktop-only (see the module note above `/points-by-category`). Ported
+    from `forge_backend/merged_api.py`'s `/profile/categories`, which reads
+    this off local SQLite `user_stats` -- the same table every other route in
+    this section reads from Postgres instead now.
+    """
+    with db.user_tx(g.user_id) as conn:
+        cat_rows = conn.execute(
+            """select category, count(*) as n from public.user_stats
+                where user_id = %s and category is not null and category != ''
+             group by category order by n desc""",
+            (g.user_id,)).fetchall()
+        sub_rows = conn.execute(
+            """select subcategory, category, count(*) as n from public.user_stats
+                where user_id = %s and subcategory is not null and subcategory != ''
+             group by subcategory, category order by n desc""",
+            (g.user_id,)).fetchall()
+
+    categories = [{"name": r["category"], "answers": r["n"], "level": "category"}
+                 for r in cat_rows]
+    seen = {c["name"] for c in categories}
+    subcategories = []
+    for r in sub_rows:
+        # A subcategory that repeats its own category is not a second filter,
+        # it is the same one (Mythology, Geography, Philosophy).
+        if r["subcategory"] in seen or r["subcategory"] == r["category"]:
+            continue
+        subcategories.append({"name": r["subcategory"], "answers": r["n"],
+                              "level": "subcategory", "parent": r["category"]})
+
+    return jsonify({"categories": categories, "subcategories": subcategories})
+
+
+@bp.get("/points-by-category")
+@require_user
+def points_by_category():
+    """Points summed per category, compared across every category at once.
+
+    The one panel here that is inherently cross-category: everything else in
+    this file scopes to a single category or the whole account, but "which
+    subject is actually worth my time" only means something measured against
+    every other subject at once -- so unlike every other route here, this one
+    takes no `category` filter at all. Negs count -5, exactly as they do in
+    the lifetime total, so a category with only negs in it still shows up
+    rather than vanishing for having nothing positive to sum.
+    """
+    with db.user_tx(g.user_id) as conn:
+        rows = conn.execute(
+            """select category,
+                      sum(case outcome when 'power' then 15
+                                       when 'ten'   then 10
+                                       when 'neg'   then -5
+                                       else 0 end) as points
+                 from public.user_stats
+                where user_id = %s and category is not null
+             group by category
+             order by points desc""",
+            (g.user_id,)).fetchall()
+
+    return jsonify({"categories": [
+        {"category": r["category"], "points": r["points"] or 0} for r in rows]})
+
+
+@bp.get("/aggressive-play")
+@require_user
+def aggressive_play():
+    """Think Then Buzz: accuracy split by whether the buzz came before or
+    after `thresholdMs` of thinking time.
+
+    One grouped query rather than the desktop's two -- `submission_time_ms >
+    threshold` is computed once in the `select`, and Postgres groups the two
+    halves in the same pass instead of two round trips for two numbers.
+    """
+    clause, params = _answer_scope()
+    try:
+        threshold = int(request.args.get("thresholdMs", 2500))
+    except (TypeError, ValueError):
+        threshold = 2500
+
+    with db.user_tx(g.user_id) as conn:
+        rows = conn.execute(
+            f"""select (submission_time_ms > %s) as thinking, outcome, count(*) as n
+                  from public.user_stats
+                 where user_id = %s and submission_time_ms is not null {clause}
+              group by thinking, outcome""",
+            [threshold, g.user_id] + params).fetchall()
+
+    thinking_counts = {r["outcome"]: r["n"] for r in rows if r["thinking"]}
+    reflex_counts = {r["outcome"]: r["n"] for r in rows if not r["thinking"]}
+    return jsonify(panels.aggressive_play(thinking_counts, reflex_counts, threshold))
+
+
+@bp.get("/buzz-spread")
+@require_user
+def buzz_spread():
+    """A 10-bin histogram of exactly where in the tossup a buzz landed.
+
+    Distinct from `/buzzpoints` above, which prices four fixed quarters --
+    this is a finer, unpriced distribution, "how often do you actually buzz
+    here" rather than "what is a buzz here worth". `least(..., bins - 1)`
+    matches the desktop's own clamp (`min(int(read * bins), bins - 1)`) for
+    the one edge case where `celerity` reads as exactly 0 on a last-word buzz
+    and would otherwise compute a bin one past the end.
+    """
+    clause, params = _answer_scope()
+    bins = 10
+
+    with db.user_tx(g.user_id) as conn:
+        rows = conn.execute(
+            f"""select least(floor((1 - celerity) * %s)::int, %s - 1) as bin,
+                       (outcome in ('power', 'ten')) as correct,
+                       count(*) as n
+                  from public.user_stats
+                 where user_id = %s and celerity is not null
+                   and outcome in ('power', 'ten', 'neg') {clause}
+              group by bin, correct""",
+            [bins, bins, g.user_id] + params).fetchall()
+
+    correct = [0] * bins
+    wrong = [0] * bins
+    for r in rows:
+        if r["bin"] is None:
+            continue
+        (correct if r["correct"] else wrong)[r["bin"]] = r["n"]
+
+    return jsonify({"bins": bins, "correct": correct, "wrong": wrong})
+
+
+@bp.get("/submission-time")
+@require_user
+def submission_time():
+    """Every recorded submission time, in seconds, split by right vs. wrong.
+
+    Sent as two raw lists rather than pre-binned: the desktop's histogram
+    (`ax.hist(..., bins=20)`) picks its own bin edges from whatever range the
+    data actually spans, and pre-binning here would mean guessing edges that
+    then have to match what the chart draws. Also doubles as the source for
+    the "thinking time" note in `get_chart_notes` (a median over the same
+    values), so this is the one panel here fetched for two different reasons
+    rather than one.
+    """
+    clause, params = _answer_scope()
+
+    with db.user_tx(g.user_id) as conn:
+        rows = conn.execute(
+            f"""select submission_time_ms, (outcome in ('power', 'ten')) as correct
+                  from public.user_stats
+                 where user_id = %s and submission_time_ms is not null
+                   and outcome in ('power', 'ten', 'neg') {clause}""",
+            [g.user_id] + params).fetchall()
+
+    correct_times = [r["submission_time_ms"] / 1000.0 for r in rows if r["correct"]]
+    incorrect_times = [r["submission_time_ms"] / 1000.0 for r in rows if not r["correct"]]
+    return jsonify({"correctTimes": correct_times, "incorrectTimes": incorrect_times})

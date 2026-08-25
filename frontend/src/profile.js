@@ -1,33 +1,56 @@
 /**
- * The profile page: the five analysis panels, drawn.
+ * The profile page: the analysis panels, drawn.
  *
  * The desktop renders each of these as a matplotlib PNG on the server and
  * ships base64 inside a JSON body. The API here returns numbers and a written
  * finding instead (see web/api/panels.py), so the drawing is this file's job.
  *
- * Charts are hand-built SVG rather than a charting library. Five charts is not
- * enough to earn a dependency, the shapes are simple (bars, a grid, a pair of
- * lines), and inline SVG inherits the page's own colours instead of needing a
- * theme adapter to be told about them.
+ * Charts are hand-built SVG rather than a charting library. The shapes are
+ * simple (bars, a grid, a pair of lines), and inline SVG inherits the page's
+ * own colours instead of needing a theme adapter to be told about them.
  *
- * **The minimum-sample gate is drawn, not just carried.** Every panel marks
- * buckets below its gate as hatched and dimmed, and says so in a legend. The
- * server already refuses to compare them or reach a verdict off them; showing
- * them identically to the solid ones would put that judgement back in the
- * reader's hands after the API had deliberately taken it out.
+ * **Colour is validated, not eyeballed.** Blue/red is the one hue pair in
+ * this app's palette that clears every colourblind-safety check (adjacent and
+ * all-pairs) against the `#2c2321` chart surface — run
+ * `node scripts/validate_palette.js "#3e8ed0,#d9534f" --mode dark --surface
+ * "#2c2321" --pairs all` from the dataviz skill to see it pass. The old
+ * green/red pairing this file used to draw negs-vs-hits with (and desktop's
+ * matplotlib charts still do, in Outcome Split and Buzz Spread) measures
+ * ΔE 4.3 under deuteranopia — a red-green colourblind reader cannot tell
+ * "power" from "neg" apart in that chart at all. Every panel below is blue
+ * (good / converted) vs. red (bad / missed), full stop; where a third class
+ * is unavoidable (Outcome Split's power/ten/neg), it is drawn as two steps of
+ * blue plus red rather than a third hue, because no hue combination with red
+ * in this app's palette clears the all-pairs floor at three slots.
+ *
+ * **The minimum-sample gate is drawn, not just carried, on the panels that
+ * have one.** Those mark buckets below their gate as hatched and dimmed, and
+ * say so in a legend — the server already refuses to compare them or reach a
+ * verdict off them, so showing them identically to the solid ones would put
+ * that judgement back in the reader's hands after the API had deliberately
+ * taken it out.
+ *
+ * **Every bar, cell and point carries its own hover tooltip.** An inline SVG
+ * chart is interactive by construction — see the dataviz skill's
+ * `interaction.md` — so this is the default here, not an add-on. Tooltips
+ * enhance; they never gate. Every number a tooltip shows also sits in the
+ * table view underneath, reachable with no pointer at all.
  */
 
 import { api } from './api.js'
 
 const NS = 'http://www.w3.org/2000/svg'
 
-// Palette, matching tailwind.config.js so the charts belong to the same app.
+// The validated pair (see the module docstring): blue for "good", red for
+// "bad", nothing else competing for identity. INK/MUTED/GRID are chart
+// chrome (text, gridlines, reference lines) — never data-identity colour.
 const INK = '#efe0db'
 const MUTED = '#baa7a1'
 const GRID = '#584741'
-const GOOD = '#4ade80'
-const BAD = '#f87171'
-const WARM = '#f6b17a'
+const BLUE = '#3e8ed0'
+const BLUE_LIGHT = '#7db3e0' // a second step of the same hue -- sequential, not a second identity
+const RED = '#d9534f'
+const SURFACE = '#2c2321'
 
 // ------------------------------------------------------------ svg helpers --
 
@@ -54,10 +77,9 @@ function canvas(width, height) {
     viewBox: `0 0 ${width} ${height}`,
     width: '100%',
     role: 'img',
-    style: 'display:block',
+    style: 'display:block;overflow:visible',
   })
-  // The hatch every panel uses for a bucket below its gate. Defined once per
-  // chart because an id has to be reachable from the shapes referencing it.
+  // The hatch every gated panel uses for a bucket below its sample floor.
   svg.append(tag('defs', {}, [
     tag('pattern', {
       id: 'thin', width: 6, height: 6, patternUnits: 'userSpaceOnUse',
@@ -81,6 +103,32 @@ function legend(minSample, unit) {
   return note
 }
 
+/** A colour-key legend: a short line/swatch beside a label, never a filled
+ *  box (see marks-and-anatomy.md — a box at this density is data-weight ink
+ *  doing a label's job). Skipped entirely for a single series; the chart's
+ *  own title already says what is plotted. */
+function seriesLegend(entries) {
+  const wrap = document.createElement('div')
+  wrap.className = 'mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-text-muted'
+  for (const { colour, label } of entries) {
+    const item = document.createElement('span')
+    item.className = 'inline-flex items-center gap-1.5'
+    const swatch = document.createElement('span')
+    swatch.className = 'inline-block h-2 w-3 rounded-sm'
+    swatch.style.background = colour
+    item.append(swatch, document.createTextNode(label))
+    wrap.append(item)
+  }
+  return wrap
+}
+
+function median(values) {
+  if (!values.length) return null
+  const sorted = [...values].sort((a, b) => a - b)
+  const mid = Math.floor(sorted.length / 2)
+  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2
+}
+
 function emptyNote(message) {
   const p = document.createElement('p')
   p.className = 'text-sm text-text-muted'
@@ -88,7 +136,9 @@ function emptyNote(message) {
   return p
 }
 
-/** A plain table, for the numbers behind whichever chart is on screen. */
+/** A plain table, for the numbers behind whichever chart is on screen --
+ *  every value a tooltip carries also lives here, reachable with no pointer
+ *  (see interaction.md: "a tooltip enhances, it never gates"). */
 function table(headers, rows) {
   const wrap = document.createElement('div')
   wrap.className = 'mt-4 overflow-x-auto'
@@ -107,6 +157,98 @@ function table(headers, rows) {
   return wrap
 }
 
+// ------------------------------------------------------------ hover layer --
+
+/** One tooltip element, reused by every chart on the page rather than one
+ *  per chart -- there is only ever one pointer, so there only needs to be
+ *  one floating readout, created lazily and repositioned on every hover. */
+let sharedTooltip = null
+function tooltipEl() {
+  if (sharedTooltip) return sharedTooltip
+  sharedTooltip = document.createElement('div')
+  sharedTooltip.className =
+    'pointer-events-none fixed z-50 hidden max-w-xs rounded-lg border border-[#584741] ' +
+    'bg-[#1d1816] px-2.5 py-1.5 text-xs shadow-lg'
+  document.body.append(sharedTooltip)
+  return sharedTooltip
+}
+
+/** Wires a hover/focus tooltip onto one mark. `render(container)` builds the
+ *  tooltip body into `container` (values as Strong text nodes, never
+ *  innerHTML -- see interaction.md's rule that labels are untrusted data).
+ *  The mark itself gets a lift (brighter fill) so hovering visibly responds,
+ *  and the hit target is the mark's own bounding box plus a few px, which
+ *  for these bar/cell charts already comfortably clears the 24px minimum. */
+function attachTooltip(mark, render, { restoreFill } = {}) {
+  const tip = tooltipEl()
+  const baseFill = mark.getAttribute('fill')
+  mark.style.cursor = 'pointer'
+  mark.tabIndex = 0
+
+  const show = (clientX, clientY) => {
+    tip.innerHTML = ''
+    render(tip)
+    tip.classList.remove('hidden')
+    const rect = tip.getBoundingClientRect()
+    tip.style.left = `${Math.min(clientX + 12, window.innerWidth - rect.width - 8)}px`
+    tip.style.top = `${Math.max(clientY - rect.height - 12, 8)}px`
+    if (baseFill && baseFill !== 'url(#thin)') {
+      mark.setAttribute('fill', restoreFill ?? BLUE_LIGHT)
+    }
+  }
+  const hide = () => {
+    tip.classList.add('hidden')
+    if (baseFill) mark.setAttribute('fill', baseFill)
+  }
+
+  mark.addEventListener('pointermove', (e) => show(e.clientX, e.clientY))
+  mark.addEventListener('pointerenter', (e) => show(e.clientX, e.clientY))
+  mark.addEventListener('pointerleave', hide)
+  mark.addEventListener('focus', () => {
+    const box = mark.getBoundingClientRect()
+    show(box.left + box.width / 2, box.top)
+  })
+  mark.addEventListener('blur', hide)
+}
+
+/** The tooltip body shared by every chart: a bold value line, then muted
+ *  detail lines -- "values lead, labels follow" (interaction.md). */
+function tooltipBody(container, title, rows) {
+  const t = document.createElement('div')
+  t.className = 'font-semibold text-text-light'
+  t.textContent = title
+  container.append(t)
+  for (const row of rows) {
+    const p = document.createElement('div')
+    p.className = 'text-text-muted'
+    p.textContent = row
+    container.append(p)
+  }
+}
+
+// ------------------------------------------------------------ view toggle --
+
+/** The Value/Spread/Table-style tab row desktop's own Settings panels use.
+ *  Pure presentation -- the caller owns which view is active and re-renders
+ *  on change; this just paints buttons and reports clicks. */
+function toggleRow(views, activeKey, onSelect) {
+  const wrap = document.createElement('div')
+  wrap.className = 'mb-3 flex justify-end'
+  const group = document.createElement('div')
+  group.className = 'inline-flex rounded-full bg-tertiary-dark p-0.5 text-xs font-bold'
+  for (const view of views) {
+    const button = document.createElement('button')
+    button.textContent = view.label
+    button.title = view.title ?? ''
+    button.className = 'rounded-full px-3 py-1 ' +
+      (view.key === activeKey ? 'bg-[#efe0db] text-[#1d1816]' : 'text-text-muted')
+    button.addEventListener('click', () => onSelect(view.key))
+    group.append(button)
+  }
+  wrap.append(group)
+  return wrap
+}
+
 // -------------------------------------------------------- where you buzz --
 
 /** Points per buzz, by quarter of the tossup.
@@ -115,13 +257,14 @@ function table(headers, rows) {
  * point of the panel is that a buzz point can be worth *negative* points and a
  * bar chart with an implicit zero at the axis hides exactly that.
  */
-function drawBuzzpoints(data) {
+function drawBuzzpointsValue(data) {
   const frame = document.createDocumentFragment()
   if (!data.hasData) return frame.append(emptyNote(data.evaluation)), frame
 
   const width = 560
   const rowH = 46
-  const height = data.bands.length * rowH + 40
+  const barH = 22
+  const height = data.bands.length * rowH + 24
   const svg = canvas(width, height)
 
   const labelW = 130
@@ -131,37 +274,51 @@ function drawBuzzpoints(data) {
   const zero = labelW + plotW / 2
   const scale = (plotW / 2) / span
 
+  svg.append(text(width - 4, 12, 'Points per buzz',
+    { 'text-anchor': 'end', 'font-size': 10, 'font-weight': 600, fill: INK }))
   svg.append(tag('line', {
-    x1: zero, y1: 8, x2: zero, y2: height - 26, stroke: GRID, 'stroke-width': 1,
+    x1: zero, y1: 20, x2: zero, y2: height - 6, stroke: GRID, 'stroke-width': 1,
   }))
-  svg.append(text(zero, height - 10, '0', { 'text-anchor': 'middle' }))
+  svg.append(text(zero, height - 2, '0', { 'text-anchor': 'middle' }))
 
   data.bands.forEach((band, i) => {
-    const y = i * rowH + 12
-    svg.append(text(labelW - 8, y + 18, band.label,
+    const y = i * rowH + 20
+    svg.append(text(labelW - 8, y + barH / 2 + 4, band.label,
       { 'text-anchor': 'end', fill: INK, 'font-size': 12 }))
 
     if (!band.buzzes) {
-      svg.append(text(zero + 8, y + 18, 'no buzzes'))
+      svg.append(text(zero + 8, y + barH / 2 + 4, 'no buzzes'))
       return
     }
     const value = band.perBuzz
     const length = Math.abs(value) * scale
-    svg.append(tag('rect', {
+    const colour = value >= 0 ? BLUE : RED
+    const bar = tag('rect', {
       x: value >= 0 ? zero : zero - length,
-      y, width: length, height: 24, rx: 3,
-      fill: fillFor(band.reliable, value >= 0 ? GOOD : BAD),
-    }))
+      y, width: Math.max(length, 2), height: barH, rx: 4,
+      fill: fillFor(band.reliable, colour),
+    })
+    svg.append(bar)
+    attachTooltip(bar, (tip) => tooltipBody(tip, band.label, [
+      `${value > 0 ? '+' : ''}${value.toFixed(1)} points per buzz`,
+      `${band.buzzes} buzz${band.buzzes === 1 ? '' : 'es'} · ${band.conversion}% converted`,
+      `${band.powers} power / ${band.tens} ten / ${band.negs} neg`,
+      ...(band.reliable ? [] : [`Fewer than ${data.minSample} buzzes — not compared`]),
+    ]), { restoreFill: value >= 0 ? BLUE_LIGHT : '#e57a76' })
+
     svg.append(text(
-      value >= 0 ? zero + length + 6 : zero - length - 6, y + 17,
+      value >= 0 ? zero + length + 6 : zero - length - 6, y + barH / 2 + 4,
       `${value > 0 ? '+' : ''}${value.toFixed(1)}`,
       { 'text-anchor': value >= 0 ? 'start' : 'end', fill: INK, 'font-size': 12 }))
-    svg.append(text(zero + (value >= 0 ? 6 : -6), y + 17,
-      `${band.buzzes} buzz${band.buzzes === 1 ? '' : 'es'} · ${band.conversion}%`,
-      { 'text-anchor': value >= 0 ? 'start' : 'end', 'font-size': 10 }))
   })
 
   frame.append(svg, legend(data.minSample, 'buzzes'))
+  return frame
+}
+
+function drawBuzzpointsTable(data) {
+  const frame = document.createDocumentFragment()
+  if (!data.hasData) return frame.append(emptyNote(data.evaluation)), frame
   frame.append(table(
     ['Buzz point', 'Buzzes', 'P / T / N', 'Points', 'Per buzz', 'Converted'],
     data.bands.map((b) => [
@@ -176,48 +333,74 @@ function drawBuzzpoints(data) {
 
 /** Accuracy at each difficulty, with the 50% line the ceiling is defined by.
  *
- * Bars rather than a connected line: difficulties you have never played are
- * gaps in the data, and a line would draw straight through them as though the
- * number in between were known.
+ * One hue throughout -- bars do not change colour by tier. The wall (nothing
+ * converts past here) is a translucent red wash behind the bars, and the
+ * ceiling itself is called out with a marker line, so a *zone* and a *single
+ * value* each get their own kind of emphasis instead of a third bar colour
+ * competing with blue/red everywhere else in this app.
  */
 function drawCeiling(data) {
   const frame = document.createDocumentFragment()
   if (!data.hasData) return frame.append(emptyNote(data.evaluation)), frame
 
   const width = 560
-  const height = 260
+  const height = 270
   const svg = canvas(width, height)
   const left = 34
-  const bottom = height - 46
+  const bottom = height - 50
+  const top = 22
   const plotW = width - left - 12
-  const plotH = bottom - 20
+  const plotH = bottom - top
   const barW = Math.min(46, plotW / data.levels.length - 8)
 
-  // Gridlines at 0 / 50 / 100. The 50 is the one that means something: the
-  // ceiling is the hardest level still above it.
+  if (data.wall !== null) {
+    const wallIdx = data.levels.findIndex((l) => l.difficulty >= data.wall)
+    if (wallIdx >= 0) {
+      const x = left + wallIdx * (plotW / data.levels.length)
+      svg.append(tag('rect', {
+        x, y: top, width: width - 12 - x, height: plotH, fill: RED, opacity: 0.10,
+      }))
+    }
+  }
+
+  // Gridlines at 0 / 50 / 100, solid hairlines -- a dashed grid reads as a
+  // projection or a threshold, which is exactly what the 50% line below
+  // means, so the grid itself stays plain and lets that line be the one
+  // dashed thing on the chart.
   for (const pct of [0, 50, 100]) {
     const y = bottom - (pct / 100) * plotH
     svg.append(tag('line', {
-      x1: left, y1: y, x2: width - 12, y2: y, stroke: GRID,
-      'stroke-width': 1, 'stroke-dasharray': pct === 50 ? '4 3' : null,
-      opacity: pct === 50 ? 1 : 0.5,
+      x1: left, y1: y, x2: width - 12, y2: y, stroke: GRID, 'stroke-width': 1,
     }))
     svg.append(text(left - 6, y + 4, `${pct}%`, { 'text-anchor': 'end', 'font-size': 10 }))
   }
+  const halfY = bottom - 0.5 * plotH
+  svg.append(tag('line', {
+    x1: left, y1: halfY, x2: width - 12, y2: halfY, stroke: MUTED,
+    'stroke-width': 1, 'stroke-dasharray': '4 3', opacity: 0.7,
+  }))
 
   data.levels.forEach((level, i) => {
     const x = left + 8 + i * (plotW / data.levels.length)
     const h = (level.accuracy / 100) * plotH
-    const isWall = data.wall !== null && level.difficulty >= data.wall
-    svg.append(tag('rect', {
-      x, y: bottom - h, width: barW, height: Math.max(h, 1), rx: 3,
-      fill: fillFor(level.reliable, isWall ? BAD : level.difficulty === data.ceiling ? GOOD : WARM),
-    }))
+    const isCeiling = level.difficulty === data.ceiling
+    const bar = tag('rect', {
+      x, y: bottom - h, width: barW, height: Math.max(h, 1), rx: 4,
+      fill: fillFor(level.reliable, BLUE),
+      stroke: isCeiling ? INK : 'none', 'stroke-width': isCeiling ? 2 : 0,
+    })
+    svg.append(bar)
+    attachTooltip(bar, (tip) => tooltipBody(tip, `${level.tier ?? `Difficulty ${level.difficulty}`}`, [
+      `${level.accuracy}% converted (${level.correct} of ${level.attempts})`,
+      `${level.perQuestion > 0 ? '+' : ''}${level.perQuestion.toFixed(1)} points per question`,
+      ...(isCeiling ? ['Your ceiling — the hardest level still above 50%'] : []),
+      ...(level.reliable ? [] : [`Fewer than ${data.minSample} answers — not compared`]),
+    ]))
+
     svg.append(text(x + barW / 2, bottom - h - 5, `${level.accuracy}%`,
       { 'text-anchor': 'middle', fill: INK, 'font-size': 10 }))
     svg.append(text(x + barW / 2, bottom + 14, level.difficulty,
       { 'text-anchor': 'middle', fill: INK, 'font-size': 11 }))
-    // The tier name is what makes a difficulty mean something you can enter.
     if (level.tier) {
       svg.append(text(x + barW / 2, bottom + 28, level.tier,
         { 'text-anchor': 'middle', 'font-size': 8 }))
@@ -225,6 +408,12 @@ function drawCeiling(data) {
   })
 
   frame.append(svg, legend(data.minSample, 'answers'))
+  return frame
+}
+
+function drawCeilingTable(data) {
+  const frame = document.createDocumentFragment()
+  if (!data.hasData) return frame.append(emptyNote(data.evaluation)), frame
   frame.append(table(
     ['Difficulty', 'Tier', 'Answers', 'Correct', 'Accuracy', 'Per question'],
     data.levels.map((l) => [
@@ -238,12 +427,13 @@ function drawCeiling(data) {
 
 /** Neg rate as a difficulty by buzz-point grid.
  *
- * A heatmap of *rates*, never counts. Raw neg counts follow wherever you
- * happen to buzz most, so 12 negs out of 12 and 12 out of 40 look identical in
- * a tally and are nothing alike -- which is the mistake this panel exists to
- * stop the outcome pie making.
+ * A heatmap of *rates*, never counts, in one sequential hue -- red, deepening
+ * with rate. Raw neg counts follow wherever you happen to buzz most, so 12
+ * negs out of 12 and 12 out of 40 look identical in a tally and are nothing
+ * alike, which is the mistake this panel exists to stop the outcome split
+ * making.
  */
-function drawNegAutopsy(data) {
+function drawNegAutopsyGrid(data) {
   const frame = document.createDocumentFragment()
   if (!data.hasData) return frame.append(emptyNote(data.evaluation)), frame
 
@@ -273,18 +463,22 @@ function drawNegAutopsy(data) {
       const py = top + y * cell
       if (!found) {
         svg.append(tag('rect', {
-          x: px + 2, y: py + 2, width: cell - 4, height: cell - 4, rx: 3,
+          x: px + 2, y: py + 2, width: cell - 4, height: cell - 4, rx: 4,
           fill: GRID, opacity: 0.25,
         }))
         return
       }
-      // Rate drives the colour; a below-gate cell is hatched so a 100% built
-      // on two buzzes cannot read as the hottest thing on the grid.
-      svg.append(tag('rect', {
-        x: px + 2, y: py + 2, width: cell - 4, height: cell - 4, rx: 3,
-        fill: found.reliable ? BAD : 'url(#thin)',
-        opacity: found.reliable ? 0.25 + 0.75 * (found.negRate / 100) : 1,
-      }))
+      const cellRect = tag('rect', {
+        x: px + 2, y: py + 2, width: cell - 4, height: cell - 4, rx: 4,
+        fill: found.reliable ? RED : 'url(#thin)',
+        opacity: found.reliable ? 0.20 + 0.75 * (found.negRate / 100) : 1,
+      })
+      svg.append(cellRect)
+      attachTooltip(cellRect, (tip) => tooltipBody(tip, `${d} · ${q}`, [
+        `${found.negRate}% neg rate`,
+        `${found.negs} of ${found.buzzes} buzzes`,
+        ...(found.reliable ? [] : [`Fewer than ${data.minSample} buzzes — not compared`]),
+      ]))
       svg.append(text(px + cell / 2, py + cell / 2, `${found.negRate}%`,
         { 'text-anchor': 'middle', fill: INK, 'font-size': 12, 'font-weight': 700 }))
       svg.append(text(px + cell / 2, py + cell / 2 + 14, `${found.negs}/${found.buzzes}`,
@@ -296,6 +490,12 @@ function drawNegAutopsy(data) {
     { 'font-size': 10 }))
 
   frame.append(svg, legend(data.minSample, 'buzzes'))
+  return frame
+}
+
+function drawNegAutopsyBreakdown(data) {
+  const frame = document.createDocumentFragment()
+  if (!data.hasData) return frame.append(emptyNote(data.evaluation)), frame
   frame.append(table(
     ['Buzz point', 'Buzzes', 'Negs', 'Neg rate'],
     data.byQuarter.map((q) => [
@@ -321,7 +521,8 @@ function drawRetention(data) {
 
   const width = 560
   const rowH = 34
-  const height = data.subjects.length * rowH + 40
+  const barH = 20
+  const height = data.subjects.length * rowH + 30
   const svg = canvas(width, height)
 
   const labelW = 150
@@ -335,23 +536,30 @@ function drawRetention(data) {
 
   const start = at(2.5)
   svg.append(tag('line', {
-    x1: start, y1: 6, x2: start, y2: height - 26, stroke: WARM,
+    x1: start, y1: 4, x2: start, y2: height - 20, stroke: MUTED,
     'stroke-width': 1, 'stroke-dasharray': '4 3',
   }))
-  svg.append(text(start, height - 10, '2.5 — where every question starts',
-    { 'text-anchor': 'middle', 'font-size': 10, fill: WARM }))
+  svg.append(text(start, height - 6, '2.5 — where every question starts',
+    { 'text-anchor': 'middle', 'font-size': 10, fill: MUTED }))
 
   data.subjects.forEach((subject, i) => {
-    const y = i * rowH + 10
-    svg.append(text(labelW - 8, y + 15, subject.category,
+    const y = i * rowH + 6
+    svg.append(text(labelW - 8, y + barH / 2 + 4, subject.category,
       { 'text-anchor': 'end', fill: INK, 'font-size': 12 }))
     const x = at(subject.ef)
     const below = subject.ef < 2.5
-    svg.append(tag('rect', {
-      x: below ? x : start, y, width: Math.max(Math.abs(x - start), 2), height: 20, rx: 3,
-      fill: fillFor(subject.reliable, below ? BAD : GOOD),
-    }))
-    svg.append(text(width - 60, y + 15, subject.ef.toFixed(2),
+    const bar = tag('rect', {
+      x: below ? x : start, y, width: Math.max(Math.abs(x - start), 2), height: barH, rx: 4,
+      fill: fillFor(subject.reliable, below ? RED : BLUE),
+    })
+    svg.append(bar)
+    attachTooltip(bar, (tip) => tooltipBody(tip, subject.category, [
+      `Easiness ${subject.ef.toFixed(2)} (starts at 2.50)`,
+      `${subject.reviewed} reviewed · ${subject.attempts} attempts, ${subject.correct} correct`,
+      `Comes back in ${subject.intervalDays} day${subject.intervalDays === 1 ? '' : 's'}`,
+      ...(subject.reliable ? [] : [`Fewer than ${data.minSample} reviewed — not compared`]),
+    ]))
+    svg.append(text(width - 60, y + barH / 2 + 4, subject.ef.toFixed(2),
       { fill: INK, 'font-size': 12 }))
   })
 
@@ -368,12 +576,11 @@ function drawRetention(data) {
 
 /** Per-cluster skill within each subject played, weakest cluster first.
  *
- * Every other panel compares *across* subjects; this is the only one that
- * looks inside one. Skill shares difficulty's 0-10 scale (see
- * web/api/adaptive.py's UserModel), so the axis is fixed the same way
- * Retention's is fixed to easiness -- a subject whose worst topic is a 6
- * should not fill the chart just because 6 is the lowest number on screen
- * today.
+ * One hue, light-to-dark by skill -- sequential encoding for a continuous
+ * 0-10 number, not three discrete "tiers" fighting for identity. Every other
+ * panel compares *across* subjects; this is the only one that looks inside
+ * one, so the axis is fixed 0-10 (see web/api/adaptive.py's UserModel) the
+ * same way Retention's is fixed to easiness.
  */
 function drawKnowledgeDepth(data) {
   const frame = document.createDocumentFragment()
@@ -398,7 +605,12 @@ function drawKnowledgeDepth(data) {
   const plotW = width - labelW - 60
   const lo = 0, hi = 10
   const at = (skill) => labelW + (Math.min(hi, Math.max(lo, skill)) / hi) * plotW
-  const colourFor = (skill) => skill < 4 ? BAD : skill >= 7 ? GOOD : WARM
+  // Lightness carries the value: thin (below 4) reads pale, strong (7+) reads
+  // full-strength blue. Never a hue change -- this is magnitude, one series.
+  const colourFor = (skill) => {
+    const t = Math.min(1, Math.max(0, skill / 10))
+    return `color-mix(in oklab, ${BLUE_LIGHT} ${(1 - t) * 100}%, #1d5a94 ${t * 100}%)`
+  }
 
   let y = 4
   for (const subject of data.subjects) {
@@ -408,10 +620,15 @@ function drawKnowledgeDepth(data) {
 
     for (const cluster of subject.clusters) {
       const x = at(cluster.skill)
-      svg.append(tag('rect', {
-        x: labelW, y, width: Math.max(x - labelW, 2), height: rowH - 8, rx: 3,
+      const bar = tag('rect', {
+        x: labelW, y, width: Math.max(x - labelW, 2), height: rowH - 8, rx: 4,
         fill: colourFor(cluster.skill),
-      }))
+      })
+      svg.append(bar)
+      attachTooltip(bar, (tip) => tooltipBody(tip, cluster.label, [
+        `Skill ${cluster.skill.toFixed(1)} of 10`,
+        subject.subcategory,
+      ]), { restoreFill: colourFor(cluster.skill) })
       svg.append(text(labelW - 8, y + (rowH - 8) / 2 + 4, cluster.label,
         { 'text-anchor': 'end', fill: MUTED, 'font-size': 11 }))
       svg.append(text(x + 6, y + (rowH - 8) / 2 + 4, cluster.skill.toFixed(1),
@@ -441,9 +658,327 @@ function escapeHtmlLocal(text) {
   return div.innerHTML
 }
 
-// -------------------------------------------------------------- progress --
+// ------------------------------------------------------------ outcome split --
 
-/** One calendar month of accuracy and buzz point.
+/** How every tossup you've buzzed on has gone: converted (power or ten) vs.
+ *  negged. A single two-segment bar rather than the desktop's pie -- see
+ *  anti-patterns.md, part-to-whole reads fine as a pie for two or three
+ *  *evenly spaced* hues, but power/ten/neg has no CVD-safe third hue in this
+ *  app's palette (checked: no combination of blue/red plus a third categorical
+ *  slot clears the all-pairs floor here), so power vs. ten is drawn as a
+ *  direct label inside the converted segment instead of a competing colour.
+ */
+function drawOutcomeSplit(data) {
+  const frame = document.createDocumentFragment()
+  const { powers, tens, negs } = data
+  const converted = powers + tens
+  const total = converted + negs
+  if (!total) return frame.append(emptyNote('No buzzes recorded yet.')), frame
+
+  const width = 560
+  const height = 92
+  const svg = canvas(width, height)
+  const barH = 40
+  const y = 28
+  const convertedW = (converted / total) * width
+  const negW = width - convertedW
+
+  if (converted > 0) {
+    const seg = tag('rect', { x: 0, y, width: Math.max(convertedW, 2), height: barH, fill: BLUE })
+    svg.append(seg)
+    attachTooltip(seg, (tip) => tooltipBody(tip, 'Converted', [
+      `${converted} of ${total} buzzes (${((converted / total) * 100).toFixed(1)}%)`,
+      `${powers} power, ${tens} ten`,
+    ]), { restoreFill: BLUE_LIGHT })
+    if (convertedW > 70) {
+      svg.append(text(convertedW / 2, y + barH / 2 - 3, `${((converted / total) * 100).toFixed(0)}% converted`,
+        { 'text-anchor': 'middle', fill: '#ffffff', 'font-size': 12, 'font-weight': 700 }))
+      svg.append(text(convertedW / 2, y + barH / 2 + 12, `${powers} power · ${tens} ten`,
+        { 'text-anchor': 'middle', fill: '#e8f1fb', 'font-size': 10 }))
+    }
+  }
+  if (negs > 0) {
+    const seg = tag('rect', { x: convertedW, y, width: Math.max(negW, 2), height: barH, fill: RED })
+    svg.append(seg)
+    attachTooltip(seg, (tip) => tooltipBody(tip, 'Negged', [
+      `${negs} of ${total} buzzes (${((negs / total) * 100).toFixed(1)}%)`,
+    ]), { restoreFill: '#e57a76' })
+    if (negW > 60) {
+      svg.append(text(convertedW + negW / 2, y + barH / 2 + 4, `${((negs / total) * 100).toFixed(0)}% neg`,
+        { 'text-anchor': 'middle', fill: '#ffffff', 'font-size': 12, 'font-weight': 700 }))
+    }
+  }
+
+  frame.append(svg, seriesLegend([
+    { colour: BLUE, label: 'Converted (power or ten)' },
+    { colour: RED, label: 'Neg' },
+  ]))
+  frame.append(table(
+    ['Outcome', 'Count', 'Share'],
+    [
+      ['Power', powers, `${total ? ((powers / total) * 100).toFixed(1) : '0.0'}%`],
+      ['Ten', tens, `${total ? ((tens / total) * 100).toFixed(1) : '0.0'}%`],
+      ['Neg', negs, `${total ? ((negs / total) * 100).toFixed(1) : '0.0'}%`],
+    ]))
+  return frame
+}
+
+// ---------------------------------------------------- points by category --
+
+/** Total points per category, every category compared at once.
+ *
+ * The one cross-category panel -- see web/api/routes/stats.py's own note on
+ * `/points-by-category` -- so unlike every other panel here it takes no
+ * category filter and, like Retention, isn't offered under a session filter
+ * either (a session is one sitting; "which subject is worth my time" is an
+ * account-wide question).
+ */
+function drawPointsByCategory(data) {
+  const frame = document.createDocumentFragment()
+  if (!data.categories.length) return frame.append(emptyNote('No categories played yet.')), frame
+
+  const width = 560
+  const rowH = 30
+  const barH = 18
+  const height = data.categories.length * rowH + 16
+  const svg = canvas(width, height)
+
+  const labelW = 160
+  const plotW = width - labelW - 70
+  const span = Math.max(15, ...data.categories.map((c) => Math.abs(c.points)))
+  const zero = labelW + plotW / 2
+  const scale = (plotW / 2) / span
+
+  svg.append(tag('line', {
+    x1: zero, y1: 4, x2: zero, y2: height - 10, stroke: GRID, 'stroke-width': 1,
+  }))
+
+  data.categories.forEach((c, i) => {
+    const y = i * rowH + 4
+    svg.append(text(labelW - 8, y + barH / 2 + 4, c.category,
+      { 'text-anchor': 'end', fill: INK, 'font-size': 12 }))
+    const length = Math.abs(c.points) * scale
+    const colour = c.points >= 0 ? BLUE : RED
+    const bar = tag('rect', {
+      x: c.points >= 0 ? zero : zero - length,
+      y, width: Math.max(length, 2), height: barH, rx: 4, fill: colour,
+    })
+    svg.append(bar)
+    attachTooltip(bar, (tip) => tooltipBody(tip, c.category, [
+      `${c.points > 0 ? '+' : ''}${c.points} points`,
+    ]), { restoreFill: c.points >= 0 ? BLUE_LIGHT : '#e57a76' })
+    svg.append(text(
+      c.points >= 0 ? zero + length + 6 : zero - length - 6, y + barH / 2 + 4,
+      `${c.points > 0 ? '+' : ''}${c.points}`,
+      { 'text-anchor': c.points >= 0 ? 'start' : 'end', fill: INK, 'font-size': 12 }))
+  })
+
+  frame.append(svg)
+  frame.append(table(['Category', 'Points'], data.categories.map((c) => [c.category, c.points])))
+  return frame
+}
+
+// ---------------------------------------------------------- think then buzz --
+
+/** Accuracy buzzing early to think it through vs. buzzing on reflex.
+ *
+ * The server sends two pre-formatted strings ("62.5% (5/8)") rather than raw
+ * numbers -- `panels.aggressive_play` is ported verbatim from the desktop's
+ * own wording, evaluation included, so the percentage is parsed back out of
+ * it for the bar rather than recomputed here and risking the two disagreeing.
+ * One hue at two strengths (strong blue >= 65%, pale blue >= 50%) plus red
+ * below half -- magnitude against a threshold, not three competing series.
+ */
+function drawAggressivePlay(data) {
+  const frame = document.createDocumentFragment()
+  const thinkingPct = parseFloat(data.thinkingBuzzAccuracy)
+  const reflexPct = parseFloat(data.reflexBuzzAccuracy)
+  if (Number.isNaN(thinkingPct) && Number.isNaN(reflexPct)) {
+    return frame.append(emptyNote(data.evaluation)), frame
+  }
+
+  const width = 480
+  const rowH = 54
+  const barH = 24
+  const height = rowH * 2 + 16
+  const svg = canvas(width, height)
+  const labelW = 190
+  const plotW = width - labelW - 60
+
+  const rows = [
+    { label: `Buzz after ${(data.thresholdMs / 1000).toFixed(1)}s (thinking)`, pct: thinkingPct, sub: data.thinkingBuzzAccuracy },
+    { label: 'Buzz before that (reflex)', pct: reflexPct, sub: data.reflexBuzzAccuracy },
+  ]
+
+  rows.forEach((row, i) => {
+    const y = i * rowH + 8
+    svg.append(text(labelW - 8, y + barH / 2 + 4, row.label,
+      { 'text-anchor': 'end', fill: INK, 'font-size': 12 }))
+    if (Number.isNaN(row.pct)) {
+      svg.append(text(labelW + 8, y + barH / 2 + 4, 'no data'))
+      return
+    }
+    const barW = (row.pct / 100) * plotW
+    const colour = row.pct >= 65 ? BLUE : row.pct >= 50 ? BLUE_LIGHT : RED
+    const bar = tag('rect', {
+      x: labelW, y, width: Math.max(barW, 2), height: barH, rx: 4, fill: colour,
+    })
+    svg.append(bar)
+    attachTooltip(bar, (tip) => tooltipBody(tip, row.label, [`Accuracy ${row.sub}`]))
+    svg.append(text(labelW + barW + 6, y + barH / 2 + 4, row.sub, { fill: INK, 'font-size': 12 }))
+  })
+
+  frame.append(svg)
+  return frame
+}
+
+// -------------------------------------------------------------- buzz spread --
+
+/** A 10-bin histogram of exactly where in the tossup a buzz lands.
+ *
+ * Distinct from Where You Buzz's Value tab, which prices four fixed quarters
+ * -- this is a finer, unpriced distribution of *how often*, not *worth how
+ * much*. Bin 0 is the earliest buzzes, bin `bins - 1` the latest.
+ */
+function drawBuzzSpread(data) {
+  const frame = document.createDocumentFragment()
+  const total = data.correct.reduce((a, b) => a + b, 0) + data.wrong.reduce((a, b) => a + b, 0)
+  if (!total) return frame.append(emptyNote('Not enough buzzes yet.')), frame
+
+  const width = 560
+  const height = 250
+  const svg = canvas(width, height)
+  const left = 34
+  const bottom = height - 34
+  const top = 22
+  const plotW = width - left - 12
+  const plotH = bottom - top
+  const gap = 3
+  const barW = plotW / data.bins - gap
+  const maxCount = Math.max(1, ...data.correct.map((c, i) => c + data.wrong[i]))
+
+  svg.append(text(left, 12, 'Buzzes by where in the tossup, correct vs. neg',
+    { 'font-size': 10, 'font-weight': 600, fill: INK }))
+
+  for (let i = 0; i < data.bins; i++) {
+    const x = left + i * (plotW / data.bins) + gap / 2
+    const wrongH = (data.wrong[i] / maxCount) * plotH
+    const correctH = (data.correct[i] / maxCount) * plotH
+    const total_i = data.wrong[i] + data.correct[i]
+
+    if (data.wrong[i] > 0) {
+      const seg = tag('rect', { x, y: bottom - wrongH, width: barW, height: Math.max(wrongH, 0), fill: RED })
+      svg.append(seg)
+      attachTooltip(seg, (tip) => tooltipBody(tip, `Bin ${i} of ${data.bins}`,
+        [`${data.wrong[i]} neg`, `${data.correct[i]} correct`]), { restoreFill: '#e57a76' })
+    }
+    if (data.correct[i] > 0) {
+      // A 2px surface gap separates the two stacked segments, same as any two
+      // touching marks in this app -- a border would add ink that isn't data.
+      const seg = tag('rect', {
+        x, y: bottom - wrongH - correctH, width: barW,
+        height: Math.max(correctH - (data.wrong[i] > 0 ? 2 : 0), 0), fill: BLUE,
+      })
+      svg.append(seg)
+      attachTooltip(seg, (tip) => tooltipBody(tip, `Bin ${i} of ${data.bins}`,
+        [`${data.correct[i]} correct`, `${data.wrong[i]} neg`]), { restoreFill: BLUE_LIGHT })
+    }
+    if (total_i === 0) {
+      svg.append(tag('rect', { x, y: bottom - 2, width: barW, height: 2, fill: GRID, opacity: 0.4 }))
+    }
+    svg.append(text(x + barW / 2, bottom + 14, i, { 'text-anchor': 'middle', 'font-size': 10 }))
+  }
+
+  svg.append(text(left, bottom + 28, 'Early buzz', { 'font-size': 10 }))
+  svg.append(text(width - 62, bottom + 28, 'Late buzz', { 'font-size': 10 }))
+
+  frame.append(svg, seriesLegend([{ colour: BLUE, label: 'Correct' }, { colour: RED, label: 'Neg' }]))
+  frame.append(table(
+    ['Bin (early → late)', 'Correct', 'Wrong', 'Total'],
+    data.correct.map((c, i) => [i, c, data.wrong[i], c + data.wrong[i]])))
+  return frame
+}
+
+// ----------------------------------------------------------- submission time --
+
+/** How long you take to answer, correct vs. incorrect.
+ *
+ * Sent as raw seconds rather than pre-binned (see routes/stats.py's own
+ * note) so the bin edges fit whatever range was actually played, the same
+ * reason the desktop's matplotlib histogram picks its own edges instead of
+ * fixed ones.
+ */
+function drawSubmissionTime(data) {
+  const frame = document.createDocumentFragment()
+  const all = data.correctTimes.concat(data.incorrectTimes)
+  if (!all.length) return frame.append(emptyNote('Not enough answers with a recorded time yet.')), frame
+
+  const bins = 10
+  const max = Math.max(...all, 1)
+  const edge = max / bins
+  const correctBins = new Array(bins).fill(0)
+  const wrongBins = new Array(bins).fill(0)
+  for (const t of data.correctTimes) correctBins[Math.min(bins - 1, Math.floor(t / edge))]++
+  for (const t of data.incorrectTimes) wrongBins[Math.min(bins - 1, Math.floor(t / edge))]++
+
+  const width = 560
+  const height = 250
+  const svg = canvas(width, height)
+  const left = 34
+  const bottom = height - 34
+  const top = 12
+  const plotW = width - left - 12
+  const plotH = bottom - top
+  const gap = 3
+  const barW = plotW / bins - gap
+  const maxCount = Math.max(1, ...correctBins.map((c, i) => c + wrongBins[i]))
+
+  for (let i = 0; i < bins; i++) {
+    const x = left + i * (plotW / bins) + gap / 2
+    const wrongH = (wrongBins[i] / maxCount) * plotH
+    const correctH = (correctBins[i] / maxCount) * plotH
+    if (wrongBins[i] > 0) {
+      const seg = tag('rect', { x, y: bottom - wrongH, width: barW, height: Math.max(wrongH, 0), fill: RED })
+      svg.append(seg)
+      attachTooltip(seg, (tip) => tooltipBody(tip, `${(i * edge).toFixed(1)}s – ${((i + 1) * edge).toFixed(1)}s`,
+        [`${wrongBins[i]} incorrect`, `${correctBins[i]} correct`]), { restoreFill: '#e57a76' })
+    }
+    if (correctBins[i] > 0) {
+      const seg = tag('rect', {
+        x, y: bottom - wrongH - correctH, width: barW,
+        height: Math.max(correctH - (wrongBins[i] > 0 ? 2 : 0), 0), fill: BLUE,
+      })
+      svg.append(seg)
+      attachTooltip(seg, (tip) => tooltipBody(tip, `${(i * edge).toFixed(1)}s – ${((i + 1) * edge).toFixed(1)}s`,
+        [`${correctBins[i]} correct`, `${wrongBins[i]} incorrect`]), { restoreFill: BLUE_LIGHT })
+    }
+    if (i % 2 === 0) {
+      svg.append(text(x + barW / 2, bottom + 14, `${(i * edge).toFixed(1)}s`,
+        { 'text-anchor': 'middle', 'font-size': 9 }))
+    }
+  }
+
+  frame.append(svg, seriesLegend([{ colour: BLUE, label: 'Correct' }, { colour: RED, label: 'Incorrect' }]))
+  const medCorrect = median(data.correctTimes)
+  const medWrong = median(data.incorrectTimes)
+  const note = document.createElement('p')
+  note.className = 'mt-3 text-xs text-text-muted'
+  note.textContent =
+    `Median time: ${medCorrect === null ? '—' : medCorrect.toFixed(1) + 's'} on correct answers, ` +
+    `${medWrong === null ? '—' : medWrong.toFixed(1) + 's'} on incorrect.`
+  frame.append(note)
+  return frame
+}
+
+// -------------------------------------------------------------------- progress --
+
+/** One calendar month of accuracy, and buzz point below it.
+ *
+ * Two small single-axis charts stacked, not one chart with two y-scales --
+ * a dual axis invents a correlation from wherever the two scales happen to
+ * line up (see the dataviz skill's anti-patterns.md, "the most common way a
+ * chart misleads"). Accuracy and buzz point share nothing but the x-axis, so
+ * that is the only thing they now share.
  *
  * Days with no play are drawn as gaps, not as zeroes: the API sends them with
  * a null accuracy for exactly this reason, and joining across them would draw
@@ -454,68 +989,82 @@ function drawProgress(data) {
   if (!data.hasData) return frame.append(emptyNote(data.evaluation)), frame
 
   const width = 720
-  const height = 240
+  const rowH = 130
+  const gap = 22
+  const height = rowH * 2 + gap
   const svg = canvas(width, height)
   const left = 34
-  const right = width - 40
-  const bottom = height - 30
+  const right = width - 16
   const plotW = right - left
-  const plotH = bottom - 18
   const step = plotW / Math.max(1, data.days.length - 1)
 
+  const dayX = (day) => left + (day.dayOfMonth - 1) * step
+
+  function xAxis(bottom) {
+    for (const day of data.days) {
+      if (day.dayOfMonth % 5 !== 0 && day.dayOfMonth !== 1) continue
+      svg.append(text(dayX(day), bottom + 16, day.dayOfMonth, { 'text-anchor': 'middle', 'font-size': 10 }))
+    }
+  }
+
+  // ---- top: accuracy ----
+  const accBottom = rowH - 18
+  svg.append(text(left, 12, 'Accuracy', { 'font-size': 10, 'font-weight': 600, fill: INK }))
   for (const pct of [0, 50, 100]) {
-    const y = bottom - (pct / 100) * plotH
+    const y = accBottom - (pct / 100) * (accBottom - 20)
     svg.append(tag('line', { x1: left, y1: y, x2: right, y2: y, stroke: GRID, opacity: 0.5 }))
     svg.append(text(left - 6, y + 4, `${pct}%`, { 'text-anchor': 'end', 'font-size': 10 }))
   }
-
-  const played = data.days.filter((d) => d.played)
-
-  // Accuracy, as a run of segments broken wherever a day was missed.
   let previous = null
   for (const day of data.days) {
-    const x = left + (day.dayOfMonth - 1) * step
+    const x = dayX(day)
     if (day.accuracy === null) { previous = null; continue }
-    const y = bottom - (day.accuracy / 100) * plotH
+    const y = accBottom - (day.accuracy / 100) * (accBottom - 20)
     if (previous) {
-      svg.append(tag('line', {
-        x1: previous.x, y1: previous.y, x2: x, y2: y, stroke: GOOD, 'stroke-width': 2,
-      }))
+      svg.append(tag('line', { x1: previous.x, y1: previous.y, x2: x, y2: y, stroke: BLUE, 'stroke-width': 2 }))
     }
     // A day under the gate is drawn hollow: it happened, and its accuracy is
     // not steady enough to read a direction from.
-    svg.append(tag('circle', {
-      cx: x, cy: y, r: 3.5,
-      fill: day.reliable ? GOOD : '#2c2321', stroke: GOOD, 'stroke-width': 1.5,
-    }))
+    const dot = tag('circle', {
+      cx: x, cy: y, r: 4.5, fill: day.reliable ? BLUE : SURFACE, stroke: BLUE, 'stroke-width': 1.5,
+    })
+    svg.append(dot)
+    attachTooltip(dot, (tip) => tooltipBody(tip, day.date, [
+      `${day.accuracy}% accuracy`, `${day.answers} answer${day.answers === 1 ? '' : 's'}`,
+      ...(day.reliable ? [] : [`Fewer than ${data.minSample} answers — not compared`]),
+    ]))
     previous = { x, y }
   }
+  xAxis(accBottom)
 
-  // Celerity on the same axis, scaled 0-1 to the same height. It shares the
-  // frame on purpose: buzzing earlier while converting less is a shape only
-  // visible when the two are drawn against each other.
+  // ---- bottom: buzz point ----
+  const buzzTop = rowH + gap
+  const buzzBottom = height - 18
+  svg.append(text(left, buzzTop - 10, 'Buzz point (fraction of tossup unread)',
+    { 'font-size': 10, 'font-weight': 600, fill: INK }))
+  for (const frac of [0, 0.5, 1]) {
+    const y = buzzBottom - frac * (buzzBottom - buzzTop)
+    svg.append(tag('line', { x1: left, y1: y, x2: right, y2: y, stroke: GRID, opacity: 0.5 }))
+    svg.append(text(left - 6, y + 4, frac.toFixed(1), { 'text-anchor': 'end', 'font-size': 10 }))
+  }
   previous = null
   for (const day of data.days) {
-    const x = left + (day.dayOfMonth - 1) * step
+    const x = dayX(day)
     if (day.celerity === null) { previous = null; continue }
-    const y = bottom - day.celerity * plotH
+    const y = buzzBottom - day.celerity * (buzzBottom - buzzTop)
     if (previous) {
-      svg.append(tag('line', {
-        x1: previous.x, y1: previous.y, x2: x, y2: y, stroke: WARM,
-        'stroke-width': 1.5, 'stroke-dasharray': '3 2',
-      }))
+      svg.append(tag('line', { x1: previous.x, y1: previous.y, x2: x, y2: y, stroke: BLUE_LIGHT, 'stroke-width': 2 }))
     }
+    const dot = tag('circle', {
+      cx: x, cy: y, r: 4.5, fill: day.reliable ? BLUE_LIGHT : SURFACE, stroke: BLUE_LIGHT, 'stroke-width': 1.5,
+    })
+    svg.append(dot)
+    attachTooltip(dot, (tip) => tooltipBody(tip, day.date, [
+      `Buzzed with ${(day.celerity * 100).toFixed(0)}% of the tossup still unread`,
+    ]))
     previous = { x, y }
   }
-
-  for (const day of data.days) {
-    if (day.dayOfMonth % 5 !== 0 && day.dayOfMonth !== 1) continue
-    svg.append(text(left + (day.dayOfMonth - 1) * step, bottom + 16, day.dayOfMonth,
-      { 'text-anchor': 'middle', 'font-size': 10 }))
-  }
-
-  svg.append(text(left, 12, 'Accuracy', { fill: GOOD, 'font-size': 10 }))
-  svg.append(text(left + 60, 12, 'Buzz point (fraction unread)', { fill: WARM, 'font-size': 10 }))
+  xAxis(buzzBottom)
 
   const note = document.createElement('p')
   note.className = 'mt-3 text-xs text-text-muted'
@@ -529,6 +1078,7 @@ function drawProgress(data) {
   finding.textContent = data.evaluation
 
   frame.append(svg, note, finding)
+  const played = data.days.filter((d) => d.played)
   if (played.length) {
     frame.append(table(
       ['Day', 'Answers', 'Correct', 'Negs', 'Accuracy', 'Buzz point', 'Points'],
@@ -543,33 +1093,64 @@ function drawProgress(data) {
 
 // `what` is the one-line description of the stat itself; the finding comes
 // from the server, because it is the part that depends on the player.
-// `perSession` marks the panels a session filter can actually reach. The
-// three built on `user_stats` can: every row of it carries the sitting it came
-// from. Retention cannot, and not for want of a column -- it reads the review
-// queue, and a question you are still relearning outlives the sitting that put
-// it there. Offering it under a session filter and quietly answering from the
-// whole account is the version of this that looks like it works.
+// `perSession` marks the panels a session filter can actually reach. Most
+// built on `user_stats` can: every row of it carries the sitting it came
+// from. Retention, Knowledge Depth and Points by Category cannot -- see each
+// panel's own comment for why.
+//
+// `views`, where present, is the Value/Spread/Table-style tab row desktop's
+// own picker groups under one entry. Every view's data is fetched once, up
+// front, when the panel is opened -- switching tabs re-renders from that
+// cache rather than re-fetching, so it's instant and the "about this stat"
+// finding (always drawn from the *first* view's data) never has to guess
+// which tab supplied it.
 const PANELS = [
   {
     key: 'buzzpoints', label: 'Where You Buzz', perSession: true,
     what: 'What a buzz is actually worth in each quarter of the tossup, in real points.',
-    load: (category, session) => api.buzzpoints(category, session),
-    draw: drawBuzzpoints,
+    views: [
+      { key: 'value', label: 'Value', title: 'What a buzz in each quarter is worth',
+        load: (category, session) => api.buzzpoints(category, session), draw: drawBuzzpointsValue },
+      { key: 'spread', label: 'Spread', title: 'How often you buzz at each point, and how those turned out',
+        load: (category, session) => api.buzzSpread(category, session), draw: drawBuzzSpread },
+      { key: 'table', label: 'Table',
+        load: (category, session) => api.buzzpoints(category, session), draw: drawBuzzpointsTable },
+    ],
     finding: (d) => d.evaluation,
   },
   {
     key: 'ceiling', label: 'Ceiling', perSession: true,
     what: 'How well you convert at each difficulty, and the tournaments those difficulties are.',
-    load: (category, session) => api.ceiling(category, session),
-    draw: drawCeiling,
+    views: [
+      { key: 'chart', label: 'Chart',
+        load: (category, session) => api.ceiling(category, session), draw: drawCeiling },
+      { key: 'table', label: 'Table',
+        load: (category, session) => api.ceiling(category, session), draw: drawCeilingTable },
+    ],
     finding: (d) => d.evaluation,
   },
   {
     key: 'negs', label: 'Neg Autopsy', perSession: true,
     what: 'Whether your negs track when you buzz or what you buzzed on — the two want opposite fixes.',
-    load: (category, session) => api.negAutopsy(category, session),
-    draw: drawNegAutopsy,
+    views: [
+      { key: 'grid', label: 'Grid', title: 'Neg rate for each difficulty and buzz point',
+        load: (category, session) => api.negAutopsy(category, session), draw: drawNegAutopsyGrid },
+      { key: 'breakdown', label: 'Breakdown', title: 'Neg rate along each axis on its own',
+        load: (category, session) => api.negAutopsy(category, session), draw: drawNegAutopsyBreakdown },
+    ],
     finding: (d) => d.evaluation,
+  },
+  {
+    key: 'outcomeSplit', label: 'Outcome Split', perSession: true,
+    what: 'Every tossup you\'ve buzzed on: converted, or negged.',
+    load: async (category, session) => (await api.stats(category, session)).lifetime,
+    draw: drawOutcomeSplit,
+    finding: (d) => {
+      const total = d.powers + d.tens + d.negs
+      if (!total) return 'No buzzes recorded yet.'
+      return `${((((d.powers + d.tens) / total)) * 100).toFixed(0)}% converted, ` +
+        `${((d.negs / total) * 100).toFixed(0)}% negged, across ${total} buzzes.`
+    },
   },
   {
     key: 'retention', label: 'Retention', perSession: false,
@@ -585,6 +1166,43 @@ const PANELS = [
     draw: drawKnowledgeDepth,
     finding: (d) => d.evaluation,
   },
+  {
+    key: 'pointsByCategory', label: 'Points by Category', perSession: false,
+    what: 'Total points earned in each category, so every subject can be weighed against every other one at once.',
+    load: () => api.pointsByCategory(),
+    draw: drawPointsByCategory,
+    finding: (d) => {
+      if (!d.categories.length) return 'No categories played yet.'
+      const best = d.categories[0]
+      const worst = d.categories[d.categories.length - 1]
+      if (best === worst) return `${best.category}: ${best.points > 0 ? '+' : ''}${best.points} points.`
+      return `Best: ${best.category} (${best.points > 0 ? '+' : ''}${best.points}). ` +
+        `Worst: ${worst.category} (${worst.points > 0 ? '+' : ''}${worst.points}).`
+    },
+  },
+  {
+    key: 'aggressivePlay', label: 'Think Then Buzz', perSession: true,
+    what: 'Whether it pays to buzz early on a hunch and work the answer out after, or to wait.',
+    load: (category, session) => api.aggressivePlay(category, session),
+    draw: drawAggressivePlay,
+    finding: (d) => d.evaluation,
+  },
+  {
+    key: 'submissionTime', label: 'Thinking Time', perSession: true,
+    what: 'How long you take to answer once buzzed, correct vs. incorrect.',
+    load: (category, session) => api.submissionTime(category, session),
+    draw: drawSubmissionTime,
+    finding: (d) => {
+      const all = d.correctTimes.concat(d.incorrectTimes)
+      if (!all.length) return 'Not enough answers with a recorded time yet.'
+      const mc = median(d.correctTimes)
+      const mw = median(d.incorrectTimes)
+      if (mc === null || mw === null) return `${all.length} answers with a recorded time.`
+      return mc <= mw
+        ? `You answer faster when you're right (median ${mc.toFixed(1)}s vs ${mw.toFixed(1)}s on misses).`
+        : `You answer faster when you're wrong (median ${mw.toFixed(1)}s vs ${mc.toFixed(1)}s on hits) — worth noticing.`
+    },
+  },
 ]
 
 // ------------------------------------------------------------------ wiring --
@@ -595,6 +1213,10 @@ export function initProfile(el) {
   // The saved Adaptive Learning sitting this page is scoped to, or null for
   // the whole account. Set only by the records page.
   let session = null
+  // Which tab is active per multi-view panel, kept across re-renders of the
+  // same panel (a category-filter change, for instance) but not meant to
+  // persist across switching to a different panel entirely.
+  let activeViewKey = null
 
   const visiblePanels = () =>
     session ? PANELS.filter((p) => p.perSession) : PANELS
@@ -608,6 +1230,7 @@ export function initProfile(el) {
         (panel.key === current ? 'bg-[#efe0db] text-[#1d1816]' : 'bg-tertiary-dark')
       button.addEventListener('click', () => {
         current = panel.key
+        activeViewKey = null
         pickerButtons()
         loadPanel()
       })
@@ -623,10 +1246,29 @@ export function initProfile(el) {
     el.statAboutWhat.textContent = panel.what
     el.statAboutFinding.textContent = ''
     try {
-      const data = await panel.load(category, session?.sessionId)
-      el.statView.textContent = ''
-      el.statView.append(panel.draw(data))
-      el.statAboutFinding.textContent = panel.finding(data)
+      if (panel.views) {
+        const datasets = await Promise.all(
+          panel.views.map((v) => v.load(category, session?.sessionId)))
+        if (!activeViewKey || !panel.views.some((v) => v.key === activeViewKey)) {
+          activeViewKey = panel.views[0].key
+        }
+        const render = () => {
+          el.statView.innerHTML = ''
+          el.statView.append(toggleRow(panel.views, activeViewKey, (key) => {
+            activeViewKey = key
+            render()
+          }))
+          const idx = panel.views.findIndex((v) => v.key === activeViewKey)
+          el.statView.append(panel.views[idx].draw(datasets[idx]))
+        }
+        render()
+        el.statAboutFinding.textContent = panel.finding(datasets[0])
+      } else {
+        const data = await panel.load(category, session?.sessionId)
+        el.statView.textContent = ''
+        el.statView.append(panel.draw(data))
+        el.statAboutFinding.textContent = panel.finding(data)
+      }
     } catch (error) {
       el.statView.textContent = error.message
     }

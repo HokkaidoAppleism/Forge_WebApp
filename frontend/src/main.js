@@ -6,7 +6,9 @@ import { initRecords } from './records.js'
 import { initReviewSettings } from './reviewSettings.js'
 import { initReviewList } from './reviewList.js'
 import { initAiSettings } from './aiSettings.js'
+import { initAccountSettings } from './accountSettings.js'
 import { renderMarkdown } from './markdown.js'
+import * as voice from './voice.js'
 
 // ---------------------------------------------------------------- elements --
 
@@ -65,15 +67,17 @@ const el = {
   categorySelect: $('categorySelect'), subcategorySelect: $('subcategorySelect'),
   subcategoryWrapper: $('subcategoryWrapper'), difficultySelect: $('difficultySelect'),
 
-  powerHighlightToggle: $('powerHighlightToggle'),
+  powerHighlightToggle: $('powerHighlightToggle'), allowRebuzzToggle: $('allowRebuzzToggle'),
   readingSpeed: $('readingSpeed'), speedDisplay: $('speedDisplay'),
+  voiceModeToggle: $('voiceModeToggle'), showTextRow: $('showTextRow'),
+  showTextToggle: $('showTextToggle'), voiceUnsupported: $('voiceUnsupported'),
 
   getNewQuestionBtn: $('getNewQuestionBtn'), getManyQuestionsBtn: $('getManyQuestionsBtn'),
   reviewMissedBtn: $('reviewMissedBtn'), stopReviewBtn: $('stopReviewBtn'),
   pauseBtn: $('pauseBtn'),
 
   ptn: $('ptn'), tossupsHeard: $('tossupsHeard'), pointsScored: $('pointsScored'),
-  celerity: $('celerity'), streakLine: $('streakLine'),
+  celerity: $('celerity'),
 
   questionContainer: $('questionContainer'), questionMeta: $('questionMeta'),
   reviewAheadNotice: $('reviewAheadNotice'),
@@ -102,6 +106,14 @@ let ticker = null       // the setTimeout chain driving the read
 let question = null     // the row currently on screen
 let buzzed = false
 let paused = false
+let allowRebuzz = false // practice aid: keep reading after a wrong guess, unscored -- see finish()
+let voiceMode = false        // read the tossup aloud instead of word-by-word
+let showTossupText = false   // Voice Mode + also print the words as they're spoken
+// True while tick() is estimating word position from the timer because this
+// platform's speech engine never fires `onboundary` -- the audio is still
+// playing, and voice.js's onEnd (not the estimate reaching the end) is what
+// closes the tossup out in that case. See voice.js's `onFallback`.
+let voiceEstimating = false
 let submitting = false  // guards double-submit; see finish()
 let reviewMode = false
 let filters = []        // the category tree from /api/questions/filters
@@ -149,7 +161,8 @@ supabase.auth.onAuthStateChange((_event, session) => {
   el.appScreen.classList.toggle('hidden', !signedIn)
 
   if (signedIn) {
-    el.whoami.textContent = session.user.email
+    signedInEmail = session.user.email
+    updateWhoami(signedInEmail)
     loadFilters()
     loadStats()
   } else {
@@ -213,6 +226,22 @@ el.recordsBtn.addEventListener('click', () => {
 const showReviewList = initReviewList({ onBack: openReader })
 
 const loadAiKeyStatus = initAiSettings()
+
+// The header falls back to the email until a username comes back, rather
+// than waiting on the request -- a signed-in header that is blank for a
+// moment reads as broken. Also what a cleared username falls back to, since
+// Settings only knows the new username, not the account's email.
+let signedInEmail = ''
+
+function updateWhoami(fallbackEmail) {
+  el.whoami.textContent = fallbackEmail
+  api.username().then(({ username }) => {
+    if (username) el.whoami.textContent = username
+  }).catch((error) => console.error(error))
+}
+
+const loadAccountEmail = initAccountSettings(
+  (username) => { el.whoami.textContent = username || signedInEmail })
 
 const openReviewSettings = initReviewSettings({
   onStartReviewing: () => {
@@ -340,7 +369,18 @@ function readingDelayMs() {
 }
 
 function updateSpeedDisplay() {
-  el.speedDisplay.textContent = `${readingDelayMs()} ms per word`
+  if (!voiceMode) {
+    el.speedDisplay.textContent = `${readingDelayMs()} ms per word`
+    return
+  }
+  // A speaking utterance's rate is fixed by the Web Speech API -- it can only
+  // be set when speech starts. Restarting mid-tossup to apply a change
+  // repeats a word and makes the text flicker, so the change lands on the
+  // next tossup and the label says so rather than looking broken.
+  const pending = voice.isSpeaking()
+  el.speedDisplay.textContent =
+    `${voice.speechRateFor(el.readingSpeed.value).toFixed(1)}x speaking speed` +
+    (pending ? ' — next tossup' : '')
 }
 
 el.readingSpeed.addEventListener('input', updateSpeedDisplay)
@@ -352,6 +392,37 @@ updateSpeedDisplay()
 el.powerHighlightToggle.addEventListener('change', () => {
   document.body.classList.toggle('no-power', !el.powerHighlightToggle.checked)
 })
+
+// ------------------------------------------------------------- voice mode --
+
+if (!voice.voiceSupported()) {
+  el.voiceModeToggle.disabled = true
+  el.voiceUnsupported.classList.remove('hidden')
+}
+
+el.voiceModeToggle.addEventListener('change', () => {
+  voiceMode = el.voiceModeToggle.checked
+  el.showTextRow.classList.toggle('hidden', !voiceMode)
+  updateSpeedDisplay()
+  // Switching mode mid-tossup would leave the reader half-spoken and
+  // half-printed, so stop and let the player start the next one cleanly.
+  abandonTossup()
+  el.questionContainer.textContent = voiceMode
+    ? 'Voice Mode on — press "Start Reader" to hear a tossup.'
+    : 'Click "Start Reader" to start practicing'
+})
+
+el.showTextToggle.addEventListener('change', () => {
+  showTossupText = el.showTextToggle.checked
+  // Reflect the change straight away rather than waiting for the next tossup.
+  if (voiceMode && words.length) {
+    if (showTossupText) paintWords(Math.min(wordIndex + 1, words.length))
+    else el.questionContainer.textContent = '🔊 Listening…'
+  }
+})
+
+// Speech keeps running after the tab closes on some platforms.
+window.addEventListener('beforeunload', () => voice.stopSpeaking())
 
 /** One word, marked up if it falls inside the power.
  *
@@ -388,21 +459,70 @@ function stopTicker() {
   ticker = null
 }
 
+// Read all the way out with nobody buzzing -- shared by the plain reveal and
+// Voice Mode, since a tossup counts as heard the same way either way. Five
+// seconds of dead time before the tossup closes; ending the instant the last
+// word lands would score a pass on a question the reader is still finishing
+// saying.
+function onTossupFullyRead() {
+  if (!buzzed && !countdownInterval) {
+    startCountdown(DEAD_TIME_SECONDS, 'Buzz in', () => finish({ didBuzz: false, guess: '' }))
+  }
+}
+
 function tick() {
   if (buzzed || paused) return
   if (wordIndex >= words.length) {
-    // Read all the way out with nobody buzzing. The desktop gives five seconds
-    // of dead time before the tossup closes, and so does this -- ending the
-    // instant the last word lands would score a pass on a question the reader
-    // is still finishing saying.
-    startCountdown(DEAD_TIME_SECONDS, 'Buzz in', () => finish({ didBuzz: false, guess: '' }))
+    // While the timer is only estimating position for still-playing speech
+    // (voice.js couldn't get onboundary events on this platform), voice.js's
+    // own onEnd closes the tossup out instead -- reaching the end of the
+    // estimate does not mean the voice has actually finished.
+    if (voiceEstimating) return
+    onTossupFullyRead()
     return
   }
-  // Appended one word at a time rather than repainting the whole container on
-  // every tick, which is why this does not just call paintWords().
-  el.questionContainer.insertAdjacentHTML('beforeend', wordHtml(wordIndex) + ' ')
+  // In Voice Mode the words are being spoken, so only paint them here if the
+  // user also asked to see the text -- this is also the fallback ticker
+  // while voice.js estimates position, and that path must stay silent unless
+  // showTossupText says otherwise.
+  if (!voiceMode || showTossupText) {
+    // Appended one word at a time rather than repainting the whole container
+    // on every tick, which is why this does not just call paintWords().
+    el.questionContainer.insertAdjacentHTML('beforeend', wordHtml(wordIndex) + ' ')
+  }
   wordIndex++
   ticker = setTimeout(tick, readingDelayMs())
+}
+
+/** Read the tossup aloud from `startIndex`, falling back to the plain ticker
+ *  if speech isn't supported or dies mid-question. */
+function speakCurrentTossup(startIndex = 0) {
+  if (!voice.voiceSupported()) { tick(); return }
+  voiceEstimating = false
+
+  voice.speak(words, startIndex, voice.speechRateFor(el.readingSpeed.value), {
+    onWord: (idx) => {
+      wordIndex = idx
+      voiceEstimating = false
+      // `onboundary` fires as a word *starts*; wordIndex counts words already
+      // finished, so revealing only up to wordIndex would leave the text one
+      // word behind the voice. Include the word currently being spoken.
+      if (showTossupText) paintWords(Math.min(wordIndex + 1, words.length))
+    },
+    onEnd: () => {
+      wordIndex = words.length
+      if (showTossupText) paintWords(words.length)
+      onTossupFullyRead()
+    },
+    onError: () => tick(),      // speech died -- still playable, just silent
+    onFallback: () => {
+      // No boundary events on this platform. Audio keeps playing; the ticker
+      // estimates position so celerity stays meaningful, but onEnd above is
+      // still what closes the tossup out.
+      voiceEstimating = true
+      tick()
+    },
+  })
 }
 
 // ---------------------------------------------------------------- countdown --
@@ -447,6 +567,8 @@ function startCountdown(seconds, label, onExpire) {
 function abandonTossup() {
   stopTicker()
   stopCountdown()
+  voice.stopSpeaking()
+  voiceEstimating = false
   words = []
   wordIndex = 0
   powerIdx = -1
@@ -531,7 +653,14 @@ async function loadQuestion(fetcher) {
   el.getExplanationBtn.disabled = false
   el.createFlashcardBtn.disabled = false
   el.questionContainer.innerHTML = ''
-  tick()
+
+  // Voice Mode speaks the tossup; normal mode reveals it word by word.
+  if (voiceMode && voice.voiceSupported()) {
+    if (!showTossupText) el.questionContainer.textContent = '🔊 Listening…'
+    speakCurrentTossup()
+  } else {
+    tick()
+  }
 }
 
 el.getNewQuestionBtn.addEventListener('click', () => {
@@ -576,8 +705,22 @@ el.pauseBtn.addEventListener('click', () => {
   if (!words.length || buzzed) return
   paused = !paused
   el.pauseBtn.textContent = paused ? 'Resume' : 'Pause'
-  if (paused) stopTicker()
-  else tick()
+  const speaking = voiceMode && voice.isSpeaking()
+  if (paused) {
+    stopTicker()
+    if (speaking) voice.pauseSpeaking()
+  } else if (speaking) {
+    voice.resumeSpeaking()
+  } else if (voiceMode && voice.voiceSupported()) {
+    // Not every pause leaves an utterance to resume: `onend`/`onerror` can
+    // land between the pause click and this one and null it out first, and
+    // `speech.resume()` has nothing left to act on then. Restart the
+    // utterance at the current word instead of falling through to the plain
+    // ticker, which would start the *text* ticker with no audio behind it.
+    speakCurrentTossup(wordIndex)
+  } else {
+    tick()
+  }
 })
 
 // -------------------------------------------------------------------- buzz --
@@ -587,6 +730,9 @@ function buzz() {
   buzzed = true
   stopTicker()
   stopCountdown()
+  // Cut the audio immediately -- hearing another word after buzzing would be
+  // wrong both for the feel of it and for the celerity already recorded.
+  voice.stopSpeaking()
   el.answerInput.disabled = false
   el.answerInput.placeholder = 'Your answer'
   el.answerInput.focus()
@@ -659,6 +805,7 @@ async function finish({ didBuzz, guess }) {
   submitting = true
   stopTicker()
   stopCountdown()
+  voice.stopSpeaking()
   el.submitAnswerBtn.disabled = true
   el.answerInput.disabled = true
 
@@ -671,10 +818,28 @@ async function finish({ didBuzz, guess }) {
       guess,
       buzzed: didBuzz,
       wordsRead: wordIndex,
+      rebuzzable: allowRebuzz,
       // Only the restore key travels. Which cluster's skill moves is decided
       // server-side from the question row -- see _apply_to_skill_model.
       ...(adaptive?.restoreKey ? { adaptive: { restoreKey: adaptive.restoreKey } } : {}),
     })
+
+    if (result.retry) {
+      // Wrong, but words remain and rebuzzes are on -- the server recorded
+      // nothing (see routes/answers.py), so this tossup just keeps reading.
+      buzzed = false
+      el.submitAnswerBtn.dataset.state = 'buzz'
+      el.submitAnswerBtn.textContent = 'Buzz'
+      el.submitAnswerBtn.disabled = false
+      el.answerInput.value = ''
+      el.answerInput.disabled = true
+      el.answerInput.placeholder = 'Buzz to answer'
+      showFeedback('Not it — keep listening.', false)
+      if (voiceMode && voice.voiceSupported()) speakCurrentTossup(wordIndex)
+      else tick()
+      return
+    }
+
     showResult(result)
     loadStats()
 
@@ -818,33 +983,15 @@ el.createFlashcardBtn.addEventListener('click', async () => {
 async function loadStats() {
   try {
     const category = chosen(el.categorySelect)[0] ?? ''
-    const { lifetime, review, streak } = await api.stats(category)
+    const { lifetime } = await api.stats(category)
     el.ptn.textContent = `${lifetime.powers} / ${lifetime.tens} / ${lifetime.negs}`
     el.tossupsHeard.textContent = lifetime.tossups
     el.pointsScored.textContent = lifetime.points
     el.celerity.textContent = lifetime.averageCelerity === null
       ? '0.000' : lifetime.averageCelerity.toFixed(3)
-    el.streakLine.textContent =
-      `${streakLine(streak)} · ${review.total} in your review list, ` +
-      `${review.due_now} due now, ${review.learned} learned.`
   } catch (error) {
-    el.streakLine.textContent = error.message
+    console.error(error)
   }
-}
-
-function streakLine(streak) {
-  if (!streak.current) {
-    return streak.best
-      ? `No streak right now — your best was ${streak.best} days.`
-      : 'Answer a question to start a streak.'
-  }
-  if (streak.atRisk) {
-    // The only streak state with something to do about it, so it is the only
-    // one that gets called out.
-    return `${streak.current} days in a row, but nothing today yet — ` +
-           `answer one question and it stands at ${streak.current + 1}.`
-  }
-  return `${streak.current} days in a row. Best: ${streak.best}.`
 }
 
 // -------------------------------------------------------- save a highlight --
@@ -1103,6 +1250,8 @@ function loadPrefs() {
   try { saved = JSON.parse(localStorage.getItem(PREFS)) ?? {} } catch { saved = {} }
   applyFontSize(saved.fontSize ?? 16)
   el.shortcutsToggle.checked = saved.shortcuts !== false
+  el.allowRebuzzToggle.checked = saved.allowRebuzz === true
+  allowRebuzz = el.allowRebuzzToggle.checked
   if (saved.readingSpeed) {
     el.readingSpeed.value = saved.readingSpeed
     updateSpeedDisplay()
@@ -1119,6 +1268,7 @@ function savePrefs() {
     shortcuts: el.shortcutsToggle.checked,
     readingSpeed: Number(el.readingSpeed.value),
     powermark: el.powerHighlightToggle.checked,
+    allowRebuzz: el.allowRebuzzToggle.checked,
   }))
 }
 
@@ -1135,6 +1285,7 @@ function openSettings() {
   el.settingsModal.classList.remove('hidden')
   el.settingsModal.classList.add('flex')
   loadAiKeyStatus()
+  loadAccountEmail()
 }
 el.settingsBtn.addEventListener('click', openSettings)
 
@@ -1159,6 +1310,10 @@ el.fontSizeRange.addEventListener('input', () => {
 })
 el.fontSizeResetBtn.addEventListener('click', () => { applyFontSize(16); savePrefs() })
 el.shortcutsToggle.addEventListener('change', savePrefs)
+el.allowRebuzzToggle.addEventListener('change', () => {
+  allowRebuzz = el.allowRebuzzToggle.checked
+  savePrefs()
+})
 el.readingSpeed.addEventListener('change', savePrefs)
 el.powerHighlightToggle.addEventListener('change', savePrefs)
 

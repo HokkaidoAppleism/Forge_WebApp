@@ -98,6 +98,14 @@ def log_answer():
         was_correct, scored_offline = _check_guess(guess, question["answer"])
 
     total_words = len(str(question["question"]).split()) or 1
+
+    # "Allow rebuzzes": a wrong guess with words still unread is a free retry,
+    # not an attempt -- the player keeps listening and nothing is written.
+    # Still fully server-scored (was_correct above is never client-supplied);
+    # the client only gets to ask for the retry, not for what counts as one.
+    if (bool(payload.get("rebuzzable")) and buzzed and not was_correct
+            and isinstance(words_read, int) and 0 < words_read < total_words):
+        return jsonify({"correct": False, "retry": True, "scoredOffline": scored_offline})
     if buzzed and isinstance(words_read, int) and 0 < words_read <= total_words:
         # Fraction of the tossup still unread at the buzz. A buzz on the first
         # word reads 1.0, one on the last reads ~0.0.
@@ -112,60 +120,10 @@ def log_answer():
     points = scoring.points_for(outcome)
 
     # ------------------------------------------------------------- write ---
-    day = local_day(payload.get("timezone"))
-
     with db.user_tx(g.user_id) as conn:
-        conn.execute(
-            """insert into public.user_stats
-                   (user_id, session_id, question_id, category, subcategory,
-                    difficulty, outcome, celerity, submission_time_ms,
-                    scored_offline, user_answer)
-               values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
-            (g.user_id, session_id, question["id"],
-             question["category"], question["subcategory"], question["difficulty"],
-             outcome, celerity,
-             submission_ms if isinstance(submission_ms, int) else None,
-             scored_offline, (guess or "").strip() or None))
-
-        # The permanent day-by-day record, which Reset Stats does not touch.
-        # A 'pass' counts toward the day's answers -- it is a question you sat
-        # through -- but contributes no buzz point, since there was no buzz.
-        has_celerity = 1 if (celerity is not None and outcome != "pass") else 0
-        conn.execute(
-            """insert into public.progress_daily
-                   (user_id, day, category, subcategory, answers, correct,
-                    negs, points, celerity_sum, celerity_n)
-               values (%s, %s, %s, %s, 1, %s, %s, %s, %s, %s)
-               on conflict (user_id, day, category, subcategory) do update set
-                   answers      = progress_daily.answers + 1,
-                   correct      = progress_daily.correct + excluded.correct,
-                   negs         = progress_daily.negs + excluded.negs,
-                   points       = progress_daily.points + excluded.points,
-                   celerity_sum = progress_daily.celerity_sum + excluded.celerity_sum,
-                   celerity_n   = progress_daily.celerity_n + excluded.celerity_n""",
-            (g.user_id, day, question["category"] or "", question["subcategory"] or "",
-             1 if outcome in ("power", "ten") else 0,
-             1 if outcome == "neg" else 0,
-             points,
-             float(celerity) if has_celerity else 0.0,
-             has_celerity))
-
-        # Every neg files the question into the review list on its own. `do
-        # nothing` on conflict rather than an update: a question already in the
-        # queue keeps the schedule it has earned, and `source` records how it
-        # first got here, which a re-neg should not rewrite.
-        if outcome == "neg":
-            conn.execute(
-                "insert into public.review_queue (user_id, question_id, source) "
-                "values (%s, %s, 'missed') on conflict do nothing",
-                (g.user_id, question["id"]))
-
-        review = _apply_to_review_queue(
-            conn, g.user_id, question["id"], outcome, was_correct, celerity, guess)
-
-        adaptive_result = _apply_to_skill_model(
-            conn, g.user_id, payload.get("adaptive"), question,
-            outcome, was_correct, celerity)
+        review, adaptive_result = _record_outcome(
+            conn, g.user_id, question, session_id, outcome, celerity, submission_ms,
+            scored_offline, guess, payload.get("timezone"), payload.get("adaptive"))
 
     return jsonify({
         "correct": was_correct,
@@ -178,6 +136,154 @@ def log_answer():
         "review": review,
         "adaptive": adaptive_result,
     })
+
+
+_VALID_OUTCOMES = ("power", "ten", "neg", "pass")
+
+
+@bp.post("/answers/declare")
+@require_user
+def declare_answer():
+    """The desktop client's answer-logging path: store the outcome *it*
+    computed, rather than computing one here.
+
+    Every other route in this file exists specifically so a client cannot do
+    this -- see the module docstring, and `POST /api/answers` above, which
+    takes a raw guess and derives the verdict server-side for exactly that
+    reason. This route is here anyway because the desktop app (still) scores
+    locally: `/getQuestion` on that side ships the answer with the question,
+    the renderer checks the guess itself, and changing that is a rewrite of
+    how the desktop reader works end to end, not a change to this API. See
+    `forge_backend/cloud.py` and `NEXT_SESSION_PROMPT.md` for where that
+    stands -- deliberately not done here, by choice, not by oversight.
+
+    **RLS still applies in full**: `user_id` still comes only from the
+    verified token, and this can only ever write rows the caller owns. What
+    it gives up is the one guarantee `POST /api/answers` adds on top of
+    that -- that the *content* of those rows is true. A player misreporting
+    their own outcome here costs them nothing they could not already get by
+    editing their own copy of the desktop app; this route does not create
+    that ability, it just gives it a name.
+    """
+    payload = request.get_json(silent=True) or {}
+    question_id = payload.get("questionId")
+    session_id = (payload.get("sessionId") or "").strip()
+    outcome = payload.get("outcome")
+    if not isinstance(question_id, int) or not session_id:
+        return jsonify({"error": "questionId and sessionId are required."}), 400
+    if outcome not in _VALID_OUTCOMES:
+        return jsonify({"error": f"outcome must be one of {_VALID_OUTCOMES}."}), 400
+
+    celerity = payload.get("celerity")
+    if celerity is not None and not isinstance(celerity, (int, float)):
+        return jsonify({"error": "celerity must be a number."}), 400
+
+    submission_ms = payload.get("submissionTimeMs")
+    scored_offline = payload.get("scoredOffline")
+    guess = payload.get("userAnswer")
+
+    with db.user_tx(g.user_id) as conn:
+        # Category and subcategory still come off the question row, never off
+        # the request -- an adaptive session on the desktop names a session by
+        # subcategory where the reader sends the parent category, and trusting
+        # whichever one the client happened to send is the exact bug
+        # `notebook.canonical_category` exists to close off on the web side.
+        question = conn.execute(
+            "select id, category, subcategory, difficulty, cluster_label "
+            "from public.questions where id = %s", (question_id,)).fetchone()
+        if question is None:
+            return jsonify({"error": "No question with that id."}), 404
+
+        review, adaptive_result = _record_outcome(
+            conn, g.user_id, question, session_id, outcome, celerity,
+            submission_ms if isinstance(submission_ms, int) else None,
+            bool(scored_offline) if scored_offline is not None else None,
+            guess, payload.get("timezone"), payload.get("adaptive"))
+
+    return jsonify({
+        "success": True,
+        "outcome": outcome,
+        "points": scoring.points_for(outcome),
+        "review": review,
+        "adaptive": adaptive_result,
+    }), 201
+
+
+def _record_outcome(conn, user_id, question, session_id, outcome, celerity,
+                    submission_ms, scored_offline, guess, timezone, adaptive_payload):
+    """The write half of scoring an answer: `user_stats`, `progress_daily`,
+    the review queue, and the adaptive skill model, whatever decided the
+    outcome. (review, adaptive_result).
+
+    Shared by `POST /api/answers` (outcome computed here, from a real guess)
+    and `POST /api/answers/declare` (outcome computed by the caller -- see
+    that route's docstring for why one exists at all). Everything below this
+    point is the same either way: once there is an outcome, what it does to
+    the rest of the account does not depend on who decided it.
+
+    `user_id` comes from the caller, which got it from `g.user_id` -- the
+    verified token, never read back off the database inside here. Passing it
+    explicitly rather than reaching for something like `auth.uid()` is the
+    same rule `db.py` documents: RLS is the belt, an explicit `user_id = %s`
+    on every statement is the braces, and the point of having both is to not
+    depend on one of them being right.
+    """
+    was_correct = outcome in ("power", "ten")
+    points = scoring.points_for(outcome)
+    day = local_day(timezone)
+
+    conn.execute(
+        """insert into public.user_stats
+               (user_id, session_id, question_id, category, subcategory,
+                difficulty, outcome, celerity, submission_time_ms,
+                scored_offline, user_answer)
+           values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+        (user_id, session_id, question["id"],
+         question["category"], question["subcategory"], question["difficulty"],
+         outcome, celerity,
+         submission_ms if isinstance(submission_ms, int) else None,
+         scored_offline, (guess or "").strip() or None))
+
+    # The permanent day-by-day record, which Reset Stats does not touch. A
+    # 'pass' counts toward the day's answers -- it is a question you sat
+    # through -- but contributes no buzz point, since there was no buzz.
+    has_celerity = 1 if (celerity is not None and outcome != "pass") else 0
+    conn.execute(
+        """insert into public.progress_daily
+               (user_id, day, category, subcategory, answers, correct,
+                negs, points, celerity_sum, celerity_n)
+           values (%s, %s, %s, %s, 1, %s, %s, %s, %s, %s)
+           on conflict (user_id, day, category, subcategory) do update set
+               answers      = progress_daily.answers + 1,
+               correct      = progress_daily.correct + excluded.correct,
+               negs         = progress_daily.negs + excluded.negs,
+               points       = progress_daily.points + excluded.points,
+               celerity_sum = progress_daily.celerity_sum + excluded.celerity_sum,
+               celerity_n   = progress_daily.celerity_n + excluded.celerity_n""",
+        (user_id, day, question["category"] or "", question["subcategory"] or "",
+         1 if outcome in ("power", "ten") else 0,
+         1 if outcome == "neg" else 0,
+         points,
+         float(celerity) if has_celerity else 0.0,
+         has_celerity))
+
+    # Every neg files the question into the review list on its own. `do
+    # nothing` on conflict rather than an update: a question already in the
+    # queue keeps the schedule it has earned, and `source` records how it
+    # first got here, which a re-neg should not rewrite.
+    if outcome == "neg":
+        conn.execute(
+            "insert into public.review_queue (user_id, question_id, source) "
+            "values (%s, %s, 'missed') on conflict do nothing",
+            (user_id, question["id"]))
+
+    review = _apply_to_review_queue(
+        conn, user_id, question["id"], outcome, was_correct, celerity, guess)
+
+    adaptive_result = _apply_to_skill_model(
+        conn, user_id, adaptive_payload, question, outcome, was_correct, celerity)
+
+    return review, adaptive_result
 
 
 def _apply_to_skill_model(conn, user_id, adaptive_payload, question,

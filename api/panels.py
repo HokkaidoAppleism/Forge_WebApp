@@ -556,6 +556,53 @@ def knowledge_depth(subjects, only_category=None, named_by_ai=True):
             "evaluation": evaluation}
 
 
+# ------------------------------------------------------------ aggressive play ---
+
+def aggressive_play(thinking_counts, reflex_counts, threshold_ms):
+    """Think Then Buzz: is it safe to buzz early on a hunch and work out the
+    answer after, or does that just trade points for negs?
+
+    Desktop-only (see routes/stats.py's own note on why this and the next two
+    panels exist at all) -- ported verbatim from
+    `forge_backend/stats_manager.py`'s `get_aggressive_play_analysis`,
+    including its exact wording and its `> 10` minimum before a verdict is
+    given at all. `thinking_counts`/`reflex_counts` are each `{outcome:
+    count}`, already split by the caller's `submission_time_ms > threshold_ms`
+    grouped query.
+    """
+    def summarize(counts):
+        correct = counts.get('power', 0) + counts.get('ten', 0)
+        negs = counts.get('neg', 0)
+        total = correct + negs
+        accuracy = (correct / total * 100) if total else 0
+        return correct, total, accuracy
+
+    thinking_correct, thinking_total, thinking_accuracy = summarize(thinking_counts)
+    reflex_correct, reflex_total, reflex_accuracy = summarize(reflex_counts)
+
+    evaluation = "Not enough data to evaluate. Play more to see your stats."
+    if thinking_total > 10:
+        if thinking_accuracy > 80:
+            evaluation = ("Excellent! You are highly accurate even when you need "
+                          "time to think. It's safe to buzz on a strong hunch.")
+        elif thinking_accuracy > 65:
+            evaluation = ("Good job. You are often correct when buzzing early to "
+                          "think. This is a solid strategy for you.")
+        elif thinking_accuracy > 50:
+            evaluation = ("You're on the right track, but be cautious. Your "
+                          "buzz-then-think strategy is correct about half the time.")
+        else:
+            evaluation = ("High risk. Buzzing early to think often results in a "
+                          "neg. Try waiting for one more clue.")
+
+    return {
+        "thinkingBuzzAccuracy": f"{thinking_accuracy:.1f}% ({thinking_correct}/{thinking_total})",
+        "reflexBuzzAccuracy": f"{reflex_accuracy:.1f}% ({reflex_correct}/{reflex_total})",
+        "evaluation": evaluation,
+        "thresholdMs": threshold_ms,
+    }
+
+
 # ---------------------------------------------------------------- progress ---
 
 def progress(rows, month=None):

@@ -268,8 +268,17 @@ def remove():
         conn.execute("delete from public.review_answers "
                      "where user_id = %s and question_id = %s",
                      (g.user_id, question_id))
-        conn.execute("delete from public.review_queue "
-                     "where user_id = %s and question_id = %s",
-                     (g.user_id, question_id))
+        # `returning` so the answer reflects what actually happened. Reporting
+        # removed:true for a question that was never in the list is the API
+        # stating something untrue, and it leaves a caller no way to tell a
+        # real removal from a no-op -- which the desktop client, whose own
+        # /reviewQueue/remove has always 404'd on a miss, needs to know.
+        removed = conn.execute(
+            "delete from public.review_queue "
+            "where user_id = %s and question_id = %s returning question_id",
+            (g.user_id, question_id)).fetchone() is not None
 
+    if not removed:
+        return jsonify({"removed": False,
+                        "error": "That question isn't in your review list."}), 404
     return jsonify({"removed": True})

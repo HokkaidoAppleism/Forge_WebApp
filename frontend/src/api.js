@@ -115,6 +115,10 @@ export const api = {
   // to drill in each category. One request, because the server groups them.
   reviewCounts: () => call('/api/review/counts'),
 
+  username: () => call('/api/settings/username'),
+  saveUsername: (username) =>
+    call('/api/settings/username', { method: 'POST', body: { username } }),
+
   reviewSettings: () => call('/api/settings/review'),
   saveReviewSettings: (settings) =>
     call('/api/settings/review', { method: 'POST', body: settings }),
@@ -180,7 +184,7 @@ export const api = {
   deleteAllClues: (category) =>
     call('/api/notebook/clues/delete-all', { method: 'POST', body: { category } }),
 
-  // The five analysis panels. Each returns numbers and a written finding, not
+  // The analysis panels. Each returns numbers and a written finding, not
   // a picture -- see web/api/panels.py -- so everything that draws them lives
   // in the browser now, in src/profile.js.
   buzzpoints: (category, session) =>
@@ -194,6 +198,16 @@ export const api = {
     call('/api/stats/knowledge-depth', { params: { category } }),
   progress: (category, month) =>
     call('/api/stats/progress', { params: { category, month } }),
+
+  // Built for the desktop backfill (see NEXT_SESSION_PROMPT_DESKTOP_CLOUD.md)
+  // but never wired into this picker until now -- the routes always existed.
+  pointsByCategory: () => call('/api/stats/points-by-category'),
+  aggressivePlay: (category, session) =>
+    call('/api/stats/aggressive-play', { params: { category, session } }),
+  buzzSpread: (category, session) =>
+    call('/api/stats/buzz-spread', { params: { category, session } }),
+  submissionTime: (category, session) =>
+    call('/api/stats/submission-time', { params: { category, session } }),
 
   // Deletes user_stats and nothing else -- the review queue, the notebook and
   // the Adaptive Learning skill model all survive. See routes/stats.py.

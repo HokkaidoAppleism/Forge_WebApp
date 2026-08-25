@@ -128,9 +128,25 @@ export function initRecords({ onBack, onOpenSession }) {
     const colour = delta > 0.05 ? 'text-green-400'
       : delta < -0.05 ? 'text-red-400' : 'text-text-muted'
 
+    const clickable = Boolean(session.sessionId)
     const node = document.createElement('div')
     node.className = 'flex flex-wrap items-center justify-between gap-4 ' +
-      'rounded-lg bg-secondary-dark p-3'
+      'rounded-lg bg-secondary-dark p-3' +
+      (clickable ? ' cursor-pointer hover:bg-tertiary-dark' : '')
+    if (clickable) {
+      // The row itself opens the session -- no separate "View stats" button
+      // to hit first. Keyboard-reachable the same way a real button is,
+      // since this is now the row's one interactive purpose beyond Delete.
+      node.tabIndex = 0
+      node.setAttribute('role', 'button')
+      node.addEventListener('click', () => onOpenSession(session))
+      node.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault()
+          onOpenSession(session)
+        }
+      })
+    }
     node.innerHTML = `
       <div class="min-w-0">
         <div class="truncate font-semibold">${escapeHtml(session.category)}</div>
@@ -150,15 +166,11 @@ export function initRecords({ onBack, onOpenSession }) {
     const actions = document.createElement('div')
     actions.className = 'flex flex-shrink-0 items-center gap-2'
 
-    if (session.sessionId) {
-      const stats = document.createElement('button')
-      stats.textContent = 'View stats'
-      stats.className = 'rounded-full bg-tertiary-dark px-3 py-1 text-xs font-bold hover:bg-accent-dark'
-      stats.addEventListener('click', () => onOpenSession(session))
-      actions.append(stats)
-    } else {
+    if (!clickable) {
       // Recorded before session ids were kept. There is nothing to filter the
-      // answers by, and an empty chart would read as "you got nothing right".
+      // answers by, and an empty chart would read as "you got nothing right" --
+      // and nothing to click through to, so the row stays plain, unlike the
+      // ones beside it.
       const note = document.createElement('span')
       note.className = 'text-xs text-text-muted'
       note.textContent = 'No per-answer detail recorded'
@@ -168,7 +180,11 @@ export function initRecords({ onBack, onOpenSession }) {
     const remove = document.createElement('button')
     remove.textContent = 'Delete'
     remove.className = 'rounded-full bg-red-700 px-3 py-1 text-xs font-bold text-white hover:bg-red-800'
-    remove.addEventListener('click', async () => {
+    remove.addEventListener('click', async (event) => {
+      // The row itself is a click target now (opens the session); Delete
+      // sits inside it, so its click must not also bubble up and open the
+      // very session the click is about to remove.
+      event.stopPropagation()
       const label = `${session.category} session from ${when(session.endedAt)}`
       // Says what survives, because the wording is the whole question here:
       // this removes the record, not the answers behind it.
