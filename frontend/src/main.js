@@ -106,6 +106,13 @@ let wordIndex = 0       // how many words have been shown
 let powerIdx = -1       // index of the word holding the (*), or -1
 let ticker = null       // the setTimeout chain driving the read
 let question = null     // the row currently on screen
+// One id per tossup, sent as clientAnswerId so the exact same POST /api/answers
+// landing twice (a network retry, a second tab, finish()'s own guard failing
+// some day) can never write user_stats twice -- see the server-side note in
+// routes/answers.py. Only the one real scored submission per tossup ever
+// writes a row, so reusing this across a rebuzz's earlier retries (which
+// write nothing at all) is correct, not a gap.
+let answerAttemptId = null
 let buzzed = false
 let paused = false
 let allowRebuzz = false // practice aid: keep reading after a wrong guess, unscored -- see finish()
@@ -593,6 +600,7 @@ function abandonTossup() {
   wordIndex = 0
   powerIdx = -1
   question = null
+  answerAttemptId = crypto.randomUUID()
   buzzed = false
   paused = false
   submitting = false
@@ -839,6 +847,7 @@ async function finish({ didBuzz, guess }) {
       buzzed: didBuzz,
       wordsRead: wordIndex,
       rebuzzable: allowRebuzz,
+      clientAnswerId: answerAttemptId,
       // Only the restore key travels. Which cluster's skill moves is decided
       // server-side from the question row -- see _apply_to_skill_model.
       ...(adaptive?.restoreKey ? { adaptive: { restoreKey: adaptive.restoreKey } } : {}),

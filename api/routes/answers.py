@@ -16,6 +16,7 @@ pool. So the shape is: read (short transaction), check (no transaction), write
 (short transaction).
 """
 
+import psycopg
 import requests
 from flask import Blueprint, g, jsonify, request
 
@@ -68,6 +69,23 @@ def _check_guess(guess, answerline):
         return simple_answer_match(guess, answerline), True
 
 
+def _duplicate_response(existing, question):
+    """Answered from the row already on disk, not re-derived -- so a
+    duplicate can never trigger a second write. See both call sites in
+    `log_answer` for why this can be reached: a plain re-check, or a true
+    concurrent race caught by the unique index instead."""
+    return {
+        "correct": existing["outcome"] in ("power", "ten"),
+        "outcome": existing["outcome"],
+        "points": scoring.points_for(existing["outcome"]),
+        "inPower": existing["outcome"] == "power",
+        "celerity": existing["celerity"],
+        "scoredOffline": existing["scored_offline"],
+        "answer": clean_answerline(question["answer"]) if question["answer"] else None,
+        "duplicate": True,
+    }
+
+
 @bp.post("/answers")
 @require_user
 def log_answer():
@@ -83,14 +101,36 @@ def log_answer():
     words_read = payload.get("wordsRead")
     submission_ms = payload.get("submissionTimeMs")
 
+    client_answer_id = payload.get("clientAnswerId")
+    if client_answer_id is not None and not isinstance(client_answer_id, str):
+        return jsonify({"error": "clientAnswerId must be a string."}), 400
+
     # ------------------------------------------------------- read the row ---
     with db.user_tx(g.user_id) as conn:
         question = conn.execute(
             "select id, question, answer, category, subcategory, difficulty, "
             "cluster_label from public.questions where id = %s",
             (question_id,)).fetchone()
-    if question is None:
-        return jsonify({"error": "No question with that id."}), 404
+        if question is None:
+            return jsonify({"error": "No question with that id."}), 404
+
+        # A duplicate of an answer already recorded under this id -- a
+        # network retry, a second tab, or (why this exists at all) the one
+        # thing standing between a client bug and the exact incident
+        # finish()'s own comment describes: two user_stats rows, two review
+        # attempts, -10 points for one neg. Answered from the stored row,
+        # not re-derived, so a duplicate can never trigger a second write to
+        # user_stats, progress_daily, the review queue or the skill model --
+        # see _record_outcome below, which this returns before reaching.
+        existing = None
+        if client_answer_id:
+            existing = conn.execute(
+                "select outcome, celerity, scored_offline from public.user_stats "
+                "where user_id = %s and client_answer_id = %s",
+                (g.user_id, client_answer_id)).fetchone()
+
+    if existing is not None:
+        return jsonify(_duplicate_response(existing, question))
 
     # ------------------------------------------------ score it, off-clock ---
     was_correct, scored_offline = (False, None)
@@ -120,10 +160,25 @@ def log_answer():
     points = scoring.points_for(outcome)
 
     # ------------------------------------------------------------- write ---
-    with db.user_tx(g.user_id) as conn:
-        review, adaptive_result = _record_outcome(
-            conn, g.user_id, question, session_id, outcome, celerity, submission_ms,
-            scored_offline, guess, payload.get("timezone"), payload.get("adaptive"))
+    try:
+        with db.user_tx(g.user_id) as conn:
+            review, adaptive_result = _record_outcome(
+                conn, g.user_id, question, session_id, outcome, celerity, submission_ms,
+                scored_offline, guess, payload.get("timezone"), payload.get("adaptive"),
+                client_answer_id)
+    except psycopg.errors.UniqueViolation:
+        # The true race the plain existence-check above can't catch: two
+        # requests for the same clientAnswerId both read "not there yet"
+        # before either had written, so both reached this insert. The whole
+        # transaction rolled back on the constraint -- nothing partial was
+        # written -- so this is exactly the sequential-duplicate case one
+        # request behind, and gets the same answer.
+        with db.user_tx(g.user_id) as conn:
+            existing = conn.execute(
+                "select outcome, celerity, scored_offline from public.user_stats "
+                "where user_id = %s and client_answer_id = %s",
+                (g.user_id, client_answer_id)).fetchone()
+        return jsonify(_duplicate_response(existing, question))
 
     return jsonify({
         "correct": was_correct,
@@ -210,7 +265,8 @@ def declare_answer():
 
 
 def _record_outcome(conn, user_id, question, session_id, outcome, celerity,
-                    submission_ms, scored_offline, guess, timezone, adaptive_payload):
+                    submission_ms, scored_offline, guess, timezone, adaptive_payload,
+                    client_answer_id=None):
     """The write half of scoring an answer: `user_stats`, `progress_daily`,
     the review queue, and the adaptive skill model, whatever decided the
     outcome. (review, adaptive_result).
@@ -236,13 +292,13 @@ def _record_outcome(conn, user_id, question, session_id, outcome, celerity,
         """insert into public.user_stats
                (user_id, session_id, question_id, category, subcategory,
                 difficulty, outcome, celerity, submission_time_ms,
-                scored_offline, user_answer)
-           values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                scored_offline, user_answer, client_answer_id)
+           values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
         (user_id, session_id, question["id"],
          question["category"], question["subcategory"], question["difficulty"],
          outcome, celerity,
          submission_ms if isinstance(submission_ms, int) else None,
-         scored_offline, (guess or "").strip() or None))
+         scored_offline, (guess or "").strip() or None, client_answer_id))
 
     # The permanent day-by-day record, which Reset Stats does not touch. A
     # 'pass' counts toward the day's answers -- it is a question you sat
