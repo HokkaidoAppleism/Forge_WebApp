@@ -422,6 +422,19 @@
                 <button id="deleteAllFlashcardsBtn" class="hidden rounded bg-red-600 px-3 py-1 text-sm font-bold text-white hover:bg-red-700">Delete All</button>
               </div>
             </div>
+            <!-- Mirrors the notes column's merge bar: appears once at least
+                 one card is ticked. Cards have no merge equivalent, so this
+                 carries export alone. -->
+            <div id="cardPickBar" class="mb-3 hidden rounded-lg bg-secondary-dark p-3">
+              <div class="flex items-center justify-between gap-2">
+                <span class="text-sm text-text-muted"><span id="cardPickCount">0</span> selected</span>
+                <div class="flex items-center gap-2">
+                  <button id="cardPickClearBtn" class="rounded bg-tertiary-dark px-3 py-1 text-sm font-bold">Clear</button>
+                  <button id="exportSelectedFlashcardsBtn" class="rounded bg-tertiary-dark px-3 py-1 text-sm font-bold hover:bg-[#4b3c37]" title="Download just the ticked cards as CSV">Export selected</button>
+                </div>
+              </div>
+            </div>
+
             <div id="cardsList" class="max-h-[70vh] space-y-4 overflow-y-auto p-1"></div>
           </div>
         </div>

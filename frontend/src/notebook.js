@@ -45,6 +45,9 @@ export function initNotebook({ onBack, onNeedAiKey }) {
     cardsList: $('cardsList'), cardCount: $('cardCount'),
     addFlashcardBtn: $('addFlashcardBtn'), deleteAllFlashcardsBtn: $('deleteAllFlashcardsBtn'),
     exportFlashcardsBtn: $('exportFlashcardsBtn'),
+    cardPickBar: $('cardPickBar'), cardPickCount: $('cardPickCount'),
+    cardPickClearBtn: $('cardPickClearBtn'),
+    exportSelectedFlashcardsBtn: $('exportSelectedFlashcardsBtn'),
 
     viewer: $('noteViewerModal'), viewerTitle: $('modalNoteTitle'),
     viewerSubtitle: $('modalNoteSubtitle'), viewerContent: $('modalNoteContent'),
@@ -67,6 +70,10 @@ export function initNotebook({ onBack, onNeedAiKey }) {
   let clues = []
   let cards = []
   let selected = new Set()
+  // Ticked flashcards, for "Export selected". Kept separate from `selected`
+  // (which is notes, and doubles as the merge selection) -- the two columns
+  // are picked independently and a card can never be a merge target.
+  let pickedCards = new Set()
   let openNote = null
 
   // ------------------------------------------------------------------ hub --
@@ -105,6 +112,9 @@ export function initNotebook({ onBack, onNeedAiKey }) {
   async function openShelf(category) {
     shelf = category
     selected.clear()
+    // Card ids are shelf-specific, so a leftover pick from the last shelf
+    // would export a card that isn't on screen any more.
+    pickedCards.clear()
     show('detailScreen')
     el.detailTitle.textContent = category
     el.search.value = ''
@@ -219,10 +229,18 @@ export function initNotebook({ onBack, onNeedAiKey }) {
       return
     }
 
+    // Each card carries a checkbox for the same reason per-question notes do:
+    // "export the whole shelf" is the common case, but a shelf is often
+    // hundreds of cards and Anki decks are built from a subset of them.
     el.cardsList.innerHTML = cards.map((c) => `
       <div data-card-row class="rounded-lg bg-secondary-dark p-4">
         <div class="flex items-start justify-between gap-3">
-          <p class="font-bold">${escapeHtml(c.term)}</p>
+          <div class="flex flex-1 items-start gap-2">
+            <input type="checkbox" data-card-pick="${c.id}"
+                   class="mt-1 h-4 w-4 shrink-0 accent-sky-500"
+                   ${pickedCards.has(c.id) ? 'checked' : ''}>
+            <p class="font-bold">${escapeHtml(c.term)}</p>
+          </div>
           <button data-delete-card="${c.id}"
                   class="shrink-0 text-xs text-red-400 hover:text-red-300"
                   title="Delete this card">✕</button>
@@ -232,6 +250,13 @@ export function initNotebook({ onBack, onNeedAiKey }) {
           ? `<p class="mt-2 text-xs text-text-muted">from
              <span class="text-[#f6b17a]">${escapeHtml(c.source_answer)}</span></p>` : ''}
       </div>`).join('')
+
+    paintCardPickBar()
+  }
+
+  function paintCardPickBar() {
+    el.cardPickCount.textContent = pickedCards.size
+    el.cardPickBar.classList.toggle('hidden', pickedCards.size < 1)
   }
 
   // --------------------------------------------------------------- search --
@@ -311,6 +336,25 @@ export function initNotebook({ onBack, onNeedAiKey }) {
   el.exportSelectedNotesBtn.addEventListener('click', () =>
     runExport(el.exportSelectedNotesBtn, 'Export selected',
       () => api.exportSelectedNotes([...selected])))
+
+  el.exportSelectedFlashcardsBtn.addEventListener('click', () =>
+    runExport(el.exportSelectedFlashcardsBtn, 'Export selected',
+      () => api.exportSelectedFlashcards([...pickedCards])))
+
+  el.cardsList.addEventListener('change', (event) => {
+    const box = event.target.closest('[data-card-pick]')
+    if (!box) return
+    const id = Number(box.dataset.cardPick)
+    if (box.checked) pickedCards.add(id)
+    else pickedCards.delete(id)
+    paintCardPickBar()
+  })
+
+  el.cardPickClearBtn.addEventListener('click', () => {
+    pickedCards.clear()
+    for (const box of el.cardsList.querySelectorAll('[data-card-pick]')) box.checked = false
+    paintCardPickBar()
+  })
 
   // ---------------------------------------------------------------- merge --
 
@@ -417,6 +461,9 @@ export function initNotebook({ onBack, onNeedAiKey }) {
       try {
         await api.deleteFlashcard(id)
         cards = cards.filter((c) => c.id !== id)
+        // Dropping it from the pick set too: exporting "selected" must not
+        // carry an id that no longer exists.
+        pickedCards.delete(id)
         paintCards()
         applySearch()
       } catch (error) { cardBtn.textContent = '!' }
