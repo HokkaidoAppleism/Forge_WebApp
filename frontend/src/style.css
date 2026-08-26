@@ -18,6 +18,37 @@
     font-weight: 600;
     color: #efe0db;
   }
+
+  /* Every `<input type="range">` in the app (reading speed, font size, the
+     review-timing slider) sets `appearance-none` on the track but never
+     defines a thumb to go with it -- so the browser falls back to its
+     *native* thumb, sized for its *native* track. The two disagree about
+     where the track's edges are, and Chrome computes drag position from the
+     native metrics it no longer has a track to check against: the thumb
+     visibly lands somewhere other than the pixel the cursor is on, which
+     reads as the value jumping around under a smooth drag. Giving every
+     range input an explicit custom thumb removes the mismatch. */
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 16px;
+    height: 16px;
+    border-radius: 9999px;
+    background: #efe0db;
+    cursor: pointer;
+    margin-top: 0;
+  }
+  input[type="range"]::-moz-range-thumb {
+    width: 16px;
+    height: 16px;
+    border: none;
+    border-radius: 9999px;
+    background: #efe0db;
+    cursor: pointer;
+  }
+  input[type="range"]::-moz-range-track {
+    background: transparent;
+  }
 }
 
 @layer components {
