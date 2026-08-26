@@ -98,19 +98,37 @@ def write_username():
 @bp.get("/ai-key")
 @require_user
 def read_ai_key():
-    """Whether this account has a Gemini key saved, and which one -- never the
-    key itself.
+    """Whether this account has a Gemini key saved, and which one -- and, for
+    the desktop app specifically, the key itself.
 
-    The desktop's `GET /api/key` returns the stored key outright. That is
-    reasonable when the caller is a local Electron window reading its own
-    machine's config file, and it is a credential-disclosure endpoint the
-    moment the caller is a web page: anything the API will hand back, a
-    borrowed session or an XSS bug will also ask for. So this returns a
-    four-character hint, which is enough to recognise a key and not enough to
-    use one.
+    A web page never gets the plaintext back: anything this endpoint hands
+    back, a borrowed session or an XSS bug in *this* app would also ask for,
+    so a browser call only ever gets a four-character hint. The desktop's
+    `GET /api/key` used to return the stored key straight from its own local
+    config file, which is a reasonable thing for a local Electron window to
+    do with its own machine's file -- and Aaron asked for that back after the
+    key moved to this shared account-wide store, so the account brought to
+    desktop shows the key it was typed into on the web, not just a
+    confirmation.
+
+    **Read this honestly, not as a real access-control boundary**: the
+    `X-ForgeQB-Client: desktop` header is set only by `forge_backend/cloud.py`,
+    never by this app's own browser code (`frontend/src/api.js`) -- so it
+    stops the *ordinary* web flow from ever seeing the plaintext, which is
+    the actual goal. It does **not** stop someone who already holds a valid
+    access token from adding that header themselves and reading the key over
+    curl; nothing about a bearer token lets the server tell "the compiled
+    desktop app" apart from "any HTTP client holding the same token." That is
+    the tradeoff Aaron accepted: the key is exactly as protected as the
+    account's session token is, no more, the same way any other data behind
+    that token already is.
     """
+    is_desktop = request.headers.get("X-ForgeQB-Client") == "desktop"
     with db.user_tx(g.user_id) as conn:
-        return jsonify(secrets_store.describe_gemini_key(conn, g.user_id))
+        described = secrets_store.describe_gemini_key(conn, g.user_id)
+        if is_desktop and described["configured"]:
+            described["apiKey"] = secrets_store.load_gemini_key(conn, g.user_id)
+        return jsonify(described)
 
 
 @bp.post("/ai-key")
