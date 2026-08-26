@@ -262,10 +262,15 @@ export function initBrowse() {
         `streak ${item.correct_streak ?? 0} · ${scheduleLabel(item)}`
       body.append(statsEl)
     }
-    // "What you answered", not the tossup text itself -- the answerline is
-    // already the row's own headline, and the point of opening a row is
-    // seeing how you've actually been doing against it, the same thing the
-    // desktop's accordion shows here.
+    const qText = document.createElement('p')
+    qText.className = 'mb-3'
+    qText.textContent = item.question ?? ''
+    body.append(qText)
+
+    // "What you answered" underneath the tossup itself -- the point of
+    // opening a row is reading the question again *and* seeing how you've
+    // actually been doing against it, the same two things the desktop's
+    // accordion shows here.
     if (seen) body.append(answerHistoryEl(item))
 
     // Only for questions not already tracked: the review list otherwise owns
