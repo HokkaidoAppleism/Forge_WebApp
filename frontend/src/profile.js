@@ -984,9 +984,13 @@ function drawSubmissionTime(data) {
  * a null accuracy for exactly this reason, and joining across them would draw
  * a fortnight away as a slide down to nothing.
  */
+/** {chart, table} -- two separate fragments now, one per tab, rather than
+ *  the chart and the table always stacked together with no way to see just
+ *  one. Matches the desktop's own Chart/Table split for this panel. */
 function drawProgress(data) {
-  const frame = document.createDocumentFragment()
-  if (!data.hasData) return frame.append(emptyNote(data.evaluation)), frame
+  if (!data.hasData) {
+    return { chart: emptyNote(data.evaluation), table: emptyNote(data.evaluation) }
+  }
 
   const width = 720
   const rowH = 130
@@ -1077,16 +1081,21 @@ function drawProgress(data) {
   finding.className = 'mt-2 text-sm leading-relaxed'
   finding.textContent = data.evaluation
 
-  frame.append(svg, note, finding)
+  const chartFrame = document.createDocumentFragment()
+  chartFrame.append(svg, note, finding)
+
+  const tableFrame = document.createDocumentFragment()
   const played = data.days.filter((d) => d.played)
   if (played.length) {
-    frame.append(table(
+    tableFrame.append(table(
       ['Day', 'Answers', 'Correct', 'Negs', 'Accuracy', 'Buzz point', 'Points'],
       played.map((d) => [
         d.date, d.answers, d.correct, d.negs, `${d.accuracy}%`,
         d.celerity === null ? '—' : d.celerity.toFixed(3), d.points])))
+  } else {
+    tableFrame.append(emptyNote('No days played this month yet.'))
   }
-  return frame
+  return { chart: chartFrame, table: tableFrame }
 }
 
 // ----------------------------------------------------------------- panels --
@@ -1217,6 +1226,12 @@ export function initProfile(el) {
   // same panel (a category-filter change, for instance) but not meant to
   // persist across switching to a different panel entirely.
   let activeViewKey = null
+  // Progress Over Time's own Chart/Table tab -- kept across month navigation
+  // and category changes, the same way activeViewKey survives a panel
+  // re-render, since switching months shouldn't silently switch you back to
+  // Chart if you'd been reading the Table.
+  let progressView = 'chart'
+  let progressData = null
 
   const visiblePanels = () =>
     session ? PANELS.filter((p) => p.perSession) : PANELS
@@ -1278,15 +1293,44 @@ export function initProfile(el) {
 
   async function loadProgress() {
     const category = el.profileCategoryFilter.value
-    el.progressView.textContent = 'Loading…'
+    el.progressChartView.textContent = 'Loading…'
+    el.progressTableView.textContent = ''
     try {
       const data = await api.progress(category, month)
-      el.progressView.textContent = ''
-      el.progressView.append(drawProgress(data))
+      progressData = data
+      renderProgressViews()
       renderMonthNav(data)
     } catch (error) {
-      el.progressView.textContent = error.message
+      el.progressChartView.textContent = error.message
     }
+  }
+
+  function progressViewButtons() {
+    el.progressViewPicker.innerHTML = ''
+    for (const view of [{ key: 'chart', label: 'Chart' }, { key: 'table', label: 'Table' }]) {
+      const button = document.createElement('button')
+      button.textContent = view.label
+      button.className = 'rounded-full px-3 py-1 text-xs font-bold ' +
+        (view.key === progressView ? 'bg-[#efe0db] text-[#1d1816]' : 'bg-tertiary-dark text-text-muted')
+      button.addEventListener('click', () => {
+        progressView = view.key
+        progressViewButtons()
+        el.progressChartView.classList.toggle('hidden', progressView !== 'chart')
+        el.progressTableView.classList.toggle('hidden', progressView !== 'table')
+      })
+      el.progressViewPicker.append(button)
+    }
+  }
+
+  function renderProgressViews() {
+    const { chart, table } = drawProgress(progressData)
+    el.progressChartView.innerHTML = ''
+    el.progressChartView.append(chart)
+    el.progressTableView.innerHTML = ''
+    el.progressTableView.append(table)
+    el.progressChartView.classList.toggle('hidden', progressView !== 'chart')
+    el.progressTableView.classList.toggle('hidden', progressView !== 'table')
+    progressViewButtons()
   }
 
   /** Month paging. Only months with play in them are offered -- stepping
