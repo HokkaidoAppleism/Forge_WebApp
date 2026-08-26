@@ -56,12 +56,15 @@ def user_tx(user_id):
         with conn.transaction():
             # Claims first, role second: after the role switch this connection
             # is deliberately less privileged, so do the setup while it still
-            # has the privileges to do it.
+            # has the privileges to do it. Both set_config calls are combined
+            # into one round trip -- claims still land before the role switch,
+            # in the same statement, so there's no window where one is set and
+            # not the other.
             conn.execute(
-                "select set_config('request.jwt.claims', %s, true)",
+                "select set_config('request.jwt.claims', %s, true),"
+                " set_config('role', 'authenticated', true)",
                 (json.dumps({"sub": user_id, "role": "authenticated"}),),
             )
-            conn.execute("select set_config('role', 'authenticated', true)")
             yield conn
 
 

@@ -57,9 +57,6 @@
           <button id="recordsBtn" class="flex h-10 w-10 items-center justify-center rounded-full bg-[#3e322e] hover:bg-[#584741]" title="Adaptive Learning Records">
             <svg xmlns="http://www.w3.org/2000/svg" class="size-5" viewBox="0 0 24 24" fill="currentColor"><path d="M5 3h12a2 2 0 0 1 2 2v16l-4-2-4 2-4-2-4 2V5a2 2 0 0 1 2-2zm2 4v2h8V7H7zm0 4v2h8v-2H7z"/></svg>
           </button>
-          <button id="browseBtn" class="flex h-10 w-10 items-center justify-center rounded-full bg-[#3e322e] hover:bg-[#584741]" title="Browse all questions">
-            <svg xmlns="http://www.w3.org/2000/svg" class="size-5" viewBox="0 0 24 24" fill="currentColor"><path d="M15.5 14h-.79l-.28-.27A6.47 6.47 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
-          </button>
           <button id="reviewSettingsBtn" class="flex h-10 w-10 items-center justify-center rounded-full bg-[#3e322e] hover:bg-[#584741]" title="Review Missed settings">
             <svg xmlns="http://www.w3.org/2000/svg" class="size-5" viewBox="0 0 24 24" fill="currentColor"><path d="M12 5V1L7 6l5 5V7a6 6 0 1 1-6 6H4a8 8 0 1 0 8-8z"/></svg>
           </button>
@@ -273,7 +270,10 @@
           <section class="mt-6 rounded-xl border border-[#584741] p-4">
             <h3 class="mb-3 flex items-center justify-between text-lg font-bold">
               Flashcards
-              <button id="createFlashcardBtn" disabled class="rounded-full bg-amber-600 px-3 py-1 text-sm font-bold disabled:cursor-not-allowed disabled:opacity-40" title="Draft flashcards from this tossup">Create Flashcard</button>
+              <span class="flex items-center gap-2">
+                <button id="saveAllDraftFlashcardsBtn" class="hidden rounded-full bg-green-600 px-3 py-1 text-sm font-bold hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-40" title="Save every drafted card not already saved">Save All</button>
+                <button id="createFlashcardBtn" disabled class="rounded-full bg-amber-600 px-3 py-1 text-sm font-bold disabled:cursor-not-allowed disabled:opacity-40" title="Draft flashcards from this tossup">Create Flashcard</button>
+              </span>
             </h3>
             <div id="draftFlashcardsContainer" class="space-y-2 text-sm text-text-muted">
               Click &ldquo;Create Flashcard&rdquo; to draft flashcards from this tossup.
@@ -593,9 +593,15 @@
             </div>
           </div>
 
-          <!-- Right: the picker and one stat view. -->
+          <!-- Right: the picker and one stat view. The sub-view toggle
+               (Value/Spread/Table, when a panel has more than one view)
+               shares this row with the panel tabs rather than floating
+               inside the chart box below. -->
           <div class="lg:col-span-2">
-            <div id="statPicker" class="mb-4 flex flex-wrap gap-2"></div>
+            <div class="mb-4 flex flex-wrap items-center justify-between gap-2">
+              <div id="statPicker" class="flex flex-wrap gap-2"></div>
+              <div id="statSubPicker" class="flex flex-wrap gap-2"></div>
+            </div>
             <div id="statView" class="min-h-[420px] rounded-lg bg-secondary-dark p-6"></div>
           </div>
         </div>
@@ -633,12 +639,40 @@
 
         <div id="recordsList" class="space-y-2"></div>
         <div id="recordsPaging" class="mt-4 flex items-center justify-between"></div>
+
+        <!-- One session's stats, inline -- clicking a row above fills and
+             reveals this instead of navigating to the Profile screen. Same
+             shape as the desktop's own records page: a single detail panel
+             under the list, not a separate page, and not one per row. -->
+        <div id="recordsDetail" class="hidden mt-6 rounded-lg bg-secondary-dark p-4">
+          <div class="mb-3 flex items-center justify-between gap-2">
+            <h2 id="recordsDetailTitle" class="text-lg font-bold"></h2>
+            <button id="closeRecordsDetailBtn" class="rounded-full bg-tertiary-dark px-3 py-1 text-sm font-bold hover:bg-[#4b3c37]">Close</button>
+          </div>
+
+          <div id="recordsDetailStats" class="mb-5 grid grid-cols-2 gap-3 md:grid-cols-5"></div>
+
+          <div class="rounded-lg bg-primary-dark p-3">
+            <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <div id="recordsDetailPicker" class="flex flex-wrap gap-2"></div>
+              <div id="recordsDetailSubPicker" class="flex flex-wrap gap-2"></div>
+            </div>
+            <h3 id="recordsDetailPanelTitle" class="mb-1 font-bold"></h3>
+            <p id="recordsDetailPanelWhat" class="mb-3 text-xs text-text-muted"></p>
+            <div id="recordsDetailView" class="min-h-[240px]"></div>
+            <p id="recordsDetailFinding" class="mt-3 text-sm leading-relaxed text-text-muted"></p>
+          </div>
+        </div>
       </div>
 
-      <!-- =========== Review list =========== -->
-      <!-- Every question in the review queue, browsable rather than only
-           drillable. `GET /api/review/queue` has served this since the queue
-           itself was built; this is the first page that renders it. -->
+      <!-- =========== Missed Questions + Browse (one page, matching desktop) =========== -->
+      <!-- Desktop's `reviewPage` is a single screen: the queue's own summary
+           and category up top, then one accordion list underneath that pages
+           through the whole 169k-question set by status (queued by default,
+           which is what makes it read as "missed questions" without being a
+           second list). Ported as one screen for the same reason -- a
+           separate "Browse" screen next to this one was two lists doing
+           almost the same job. -->
       <div id="reviewListScreen" class="hidden px-6 py-6">
         <button id="backFromReviewListBtn" class="mb-4 rounded-full bg-[#3e322e] px-4 py-2 font-bold">&larr; Back to Quiz</button>
         <h1 class="mb-2 text-3xl font-bold tracking-tight">Missed Questions</h1>
@@ -646,45 +680,40 @@
 
         <div id="reviewListSummary" class="mb-6 grid grid-cols-2 gap-3 md:grid-cols-4"></div>
 
-        <div class="mb-4 flex flex-wrap items-center gap-3">
-          <div id="reviewListStatusTabs" class="flex flex-wrap gap-2"></div>
-          <label for="reviewListCategoryFilter" class="ml-auto text-sm text-text-muted">Category</label>
+        <div class="mb-6 flex flex-wrap items-center gap-3">
+          <label for="reviewListCategoryFilter" class="text-sm text-text-muted">Review category</label>
           <select id="reviewListCategoryFilter"
             class="rounded-lg border border-[#584741] bg-[#1d1816] p-2 text-white focus:border-[#efe0db] focus:outline-none">
             <option value="all">All categories</option>
           </select>
+          <button id="startReviewFromListBtn" class="ml-auto rounded-full bg-amber-700 px-4 py-2 text-sm font-bold text-white hover:bg-amber-800">Start Reviewing</button>
         </div>
 
-        <div id="reviewListList" class="space-y-2"></div>
-        <div id="reviewListPaging" class="mt-4 flex items-center justify-between"></div>
-      </div>
+        <div class="border-t border-[#584741] pt-6">
+          <h2 class="mb-1 text-2xl font-bold tracking-tight">Browse All Questions</h2>
+          <p class="mb-4 text-text-muted">The whole set, labelled by where each one stands with you.</p>
 
-      <!-- =========== Browse all questions =========== -->
-      <!-- The counterpart to Missed Questions: that page is what you got
-           wrong, this is the whole set, so the 169k questions read as a
-           library rather than a list of failures. Ported from the desktop's
-           own "Browse All Questions" section. -->
-      <div id="browseScreen" class="hidden px-6 py-6">
-        <button id="backFromBrowseBtn" class="mb-4 rounded-full bg-[#3e322e] px-4 py-2 font-bold">&larr; Back to Quiz</button>
-        <h1 class="mb-2 text-3xl font-bold tracking-tight">Browse Questions</h1>
-        <p class="mb-6 text-text-muted">Every question in the set, with where you stand on it.</p>
-
-        <div class="mb-4 flex flex-wrap items-center gap-3">
-          <div id="browseStatusTabs" class="flex flex-wrap gap-2"></div>
-          <div class="ml-auto flex flex-wrap items-center gap-2">
-            <label for="browseCategoryFilter" class="text-sm text-text-muted">Category</label>
+          <div class="mb-4 flex flex-wrap items-center gap-3">
+            <input id="browseSearch" type="search" placeholder="Search answers…"
+              class="min-w-[200px] flex-1 rounded-lg border border-[#584741] bg-[#1d1816] p-2 text-white placeholder:text-text-muted focus:border-[#efe0db] focus:outline-none">
+            <select id="browseStatus"
+              class="rounded-lg border border-[#584741] bg-[#1d1816] p-2 text-white focus:border-[#efe0db] focus:outline-none">
+              <option value="queued" selected>In review</option>
+              <option value="stuck">Stuck</option>
+              <option value="learned">Relearned</option>
+              <option value="unseen">Never seen</option>
+              <option value="all">Any status</option>
+            </select>
             <select id="browseCategoryFilter"
               class="rounded-lg border border-[#584741] bg-[#1d1816] p-2 text-white focus:border-[#efe0db] focus:outline-none">
               <option value="all">All categories</option>
             </select>
-            <input id="browseSearch" type="search" placeholder="Search answers…"
-              class="w-56 rounded-lg border border-[#584741] bg-[#1d1816] p-2 text-white placeholder:text-text-muted focus:border-[#efe0db] focus:outline-none">
           </div>
-        </div>
-        <p id="browseSearchNote" class="mb-4 hidden text-xs text-[#f6b17a]"></p>
+          <p id="browseSearchNote" class="mb-4 hidden text-xs text-[#f6b17a]"></p>
 
-        <div id="browseList" class="space-y-2"></div>
-        <div id="browsePaging" class="mt-4 flex items-center justify-between"></div>
+          <div id="browseList" class="space-y-2"></div>
+          <div id="browsePaging" class="mt-4 flex items-center justify-between"></div>
+        </div>
       </div>
     </div>
 

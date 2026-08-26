@@ -230,10 +230,11 @@ function tooltipBody(container, title, rows) {
 
 /** The Value/Spread/Table-style tab row desktop's own Settings panels use.
  *  Pure presentation -- the caller owns which view is active and re-renders
- *  on change; this just paints buttons and reports clicks. */
+ *  on change; this just paints buttons and reports clicks. Lives in its own
+ *  row alongside the main panel picker (statSubPicker / recordsDetailSubPicker),
+ *  not inside the chart box, so it reads as "which view of this panel"
+ *  rather than a second, disconnected control floating below the title. */
 function toggleRow(views, activeKey, onSelect) {
-  const wrap = document.createElement('div')
-  wrap.className = 'mb-3 flex justify-end'
   const group = document.createElement('div')
   group.className = 'inline-flex rounded-full bg-tertiary-dark p-0.5 text-xs font-bold'
   for (const view of views) {
@@ -245,8 +246,7 @@ function toggleRow(views, activeKey, onSelect) {
     button.addEventListener('click', () => onSelect(view.key))
     group.append(button)
   }
-  wrap.append(group)
-  return wrap
+  return group
 }
 
 // -------------------------------------------------------- where you buzz --
@@ -1245,6 +1245,7 @@ export function initProfile(el) {
     el.statAboutTitle.textContent = panel.label
     el.statAboutWhat.textContent = panel.what
     el.statAboutFinding.textContent = ''
+    el.statSubPicker.innerHTML = ''
     try {
       if (panel.views) {
         const datasets = await Promise.all(
@@ -1253,11 +1254,12 @@ export function initProfile(el) {
           activeViewKey = panel.views[0].key
         }
         const render = () => {
-          el.statView.innerHTML = ''
-          el.statView.append(toggleRow(panel.views, activeViewKey, (key) => {
+          el.statSubPicker.innerHTML = ''
+          el.statSubPicker.append(toggleRow(panel.views, activeViewKey, (key) => {
             activeViewKey = key
             render()
           }))
+          el.statView.innerHTML = ''
           const idx = panel.views.findIndex((v) => v.key === activeViewKey)
           el.statView.append(panel.views[idx].draw(datasets[idx]))
         }
@@ -1398,5 +1400,79 @@ export function initProfile(el) {
     loadLifetime()
     loadPanel()
     if (!session) loadProgress()
+  }
+}
+
+/** The panel picker alone, scoped to one saved session, for the records
+ *  list's inline detail -- reuses the same `PANELS` and draw functions
+ *  `initProfile` does, so the charts stay one implementation, but targets its
+ *  own elements rather than the full Profile screen's. records.js supplies
+ *  the identity/stat-tile row itself, since that data is already sitting in
+ *  the row that was clicked and needs no extra round trip. */
+export function initSessionPanels(el) {
+  const panels = PANELS.filter((p) => p.perSession)
+  let current = panels[0].key
+  let activeViewKey = null
+  let sessionId = null
+
+  function pickerButtons() {
+    el.statPicker.innerHTML = ''
+    for (const panel of panels) {
+      const button = document.createElement('button')
+      button.textContent = panel.label
+      button.className = 'rounded-full px-4 py-2 text-sm font-bold ' +
+        (panel.key === current ? 'bg-[#efe0db] text-[#1d1816]' : 'bg-tertiary-dark')
+      button.addEventListener('click', () => {
+        current = panel.key
+        activeViewKey = null
+        pickerButtons()
+        loadPanel()
+      })
+      el.statPicker.append(button)
+    }
+  }
+
+  async function loadPanel() {
+    const panel = panels.find((p) => p.key === current)
+    el.statView.textContent = 'Loading…'
+    el.statAboutTitle.textContent = panel.label
+    el.statAboutWhat.textContent = panel.what
+    el.statAboutFinding.textContent = ''
+    el.statSubPicker.innerHTML = ''
+    try {
+      if (panel.views) {
+        const datasets = await Promise.all(panel.views.map((v) => v.load('', sessionId)))
+        if (!activeViewKey || !panel.views.some((v) => v.key === activeViewKey)) {
+          activeViewKey = panel.views[0].key
+        }
+        const render = () => {
+          el.statSubPicker.innerHTML = ''
+          el.statSubPicker.append(toggleRow(panel.views, activeViewKey, (key) => {
+            activeViewKey = key
+            render()
+          }))
+          el.statView.innerHTML = ''
+          const idx = panel.views.findIndex((v) => v.key === activeViewKey)
+          el.statView.append(panel.views[idx].draw(datasets[idx]))
+        }
+        render()
+        el.statAboutFinding.textContent = panel.finding(datasets[0])
+      } else {
+        const data = await panel.load('', sessionId)
+        el.statView.textContent = ''
+        el.statView.append(panel.draw(data))
+        el.statAboutFinding.textContent = panel.finding(data)
+      }
+    } catch (error) {
+      el.statView.textContent = error.message
+    }
+  }
+
+  return function showSessionPanels(newSessionId) {
+    sessionId = newSessionId
+    current = panels[0].key
+    activeViewKey = null
+    pickerButtons()
+    loadPanel()
   }
 }

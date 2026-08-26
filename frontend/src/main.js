@@ -23,7 +23,6 @@ const el = {
   notebookHubScreen: $('notebookHubScreen'),
   notebookDetailScreen: $('notebookDetailScreen'),
   recordsScreen: $('recordsScreen'), reviewListScreen: $('reviewListScreen'),
-  browseScreen: $('browseScreen'), browseBtn: $('browseBtn'),
   profileBtn: $('profileBtn'), backToReaderBtn: $('backToReaderBtn'),
   aboutBtn: $('aboutBtn'), backFromAboutBtn: $('backFromAboutBtn'),
   notebookBtn: $('notebookBtn'), saveHighlightBtn: $('saveHighlightBtn'),
@@ -54,7 +53,7 @@ const el = {
   profileNegs: $('profileNegs'), profileCelerity: $('profileCelerity'),
   statAboutTitle: $('statAboutTitle'), statAboutWhat: $('statAboutWhat'),
   statAboutFinding: $('statAboutFinding'),
-  statPicker: $('statPicker'), statView: $('statView'),
+  statPicker: $('statPicker'), statSubPicker: $('statSubPicker'), statView: $('statView'),
   progressNav: $('progressNav'), progressView: $('progressView'),
   profileTitle: $('profileTitle'), profileCategoryLabel: $('profileCategoryLabel'),
   progressSection: $('progressSection'),
@@ -88,6 +87,7 @@ const el = {
   addToMissedBtn: $('addToMissedBtn'),
   getExplanationBtn: $('getExplanationBtn'), explanationContainer: $('explanationContainer'),
   createFlashcardBtn: $('createFlashcardBtn'), draftFlashcardsContainer: $('draftFlashcardsContainer'),
+  saveAllDraftFlashcardsBtn: $('saveAllDraftFlashcardsBtn'),
 }
 
 // ------------------------------------------------------------------ state --
@@ -184,7 +184,7 @@ supabase.auth.onAuthStateChange((_event, session) => {
     signedInEmail = session.user.email
     updateWhoami(signedInEmail)
     loadFilters()
-    loadStats()
+    resetSessionStats()
   } else {
     abandonTossup()
     openReader()
@@ -202,7 +202,6 @@ const showProfile = initProfile(el)
 const SCREENS = [
   'readerScreen', 'profileScreen', 'aboutScreen', 'adaptiveSetupScreen',
   'notebookHubScreen', 'notebookDetailScreen', 'recordsScreen', 'reviewListScreen',
-  'browseScreen',
 ]
 
 /** Show exactly one screen. Leaving a tossup half-read to look at something
@@ -228,29 +227,29 @@ el.profileBtn.addEventListener('click', () => {
 
 // ---------------------------------------------------- records and review --
 
-const showRecords = initRecords({
-  onBack: openReader,
-  // A record does not draw its own charts: it opens the profile scoped to
-  // that sitting, because the profile already draws them and the API already
-  // answers them per session. See the note at the top of records.js.
-  onOpenSession: (session) => {
-    showScreen('profileScreen')
-    showProfile(filters, session)
-  },
-})
+// Clicking a record expands its stats inline now -- see records.js -- so
+// this no longer needs to hand the profile screen a session to open.
+const showRecords = initRecords({ onBack: openReader })
 
 el.recordsBtn.addEventListener('click', () => {
   showScreen('recordsScreen')
   showRecords()
 })
 
-const showReviewList = initReviewList({ onBack: openReader })
-const showBrowse = initBrowse({ onBack: openReader })
-
-el.browseBtn.addEventListener('click', () => {
-  showScreen('browseScreen')
-  showBrowse()
+const showBrowse = initBrowse()
+const showReviewList = initReviewList({
+  onBack: openReader,
+  onStartReviewing: () => {
+    openReader()
+    el.reviewMissedBtn.click()
+  },
 })
+
+function openReviewListScreen() {
+  showScreen('reviewListScreen')
+  showReviewList()
+  showBrowse()
+}
 
 const loadAiKeyStatus = initAiSettings()
 
@@ -274,10 +273,7 @@ const openReviewSettings = initReviewSettings({
     openReader()
     el.reviewMissedBtn.click()
   },
-  onOpenReviewList: () => {
-    showScreen('reviewListScreen')
-    showReviewList()
-  },
+  onOpenReviewList: openReviewListScreen,
 })
 
 el.reviewSettingsBtn.addEventListener('click', openReviewSettings)
@@ -298,11 +294,10 @@ el.confirmResetStatsBtn.addEventListener('click', async () => {
   try {
     await api.resetStats()
     showResetModal(false)
-    // The lifetime tiles on the reader and the profile both read from the
-    // same account-wide totals this just changed, so both are refreshed --
-    // not toggled to zero locally, which would drift the moment the server's
-    // own accounting (streak, review counts) turned out to disagree.
-    await loadStats()
+    // "Your Stats" is this sitting's own counter, not read from the server --
+    // wiping the account's lifetime totals is still a fair moment to zero it
+    // too, since a fresh account-wide start is exactly what a new session is.
+    resetSessionStats()
     if (!el.profileScreen.classList.contains('hidden')) {
       showProfile(filters)
     }
@@ -370,10 +365,7 @@ function refreshSubcategories() {
   el.subcategoryWrapper.classList.toggle('hidden', available.length === 0)
 }
 
-el.categorySelect.addEventListener('change', () => {
-  refreshSubcategories()
-  loadStats()
-})
+el.categorySelect.addEventListener('change', refreshSubcategories)
 
 /** What the reader should ask for. Subcategory wins over category when set:
  *  picking "American Literature" under "Literature" means the narrower one. */
@@ -622,6 +614,7 @@ function abandonTossup() {
   el.createFlashcardBtn.disabled = true
   el.draftFlashcardsContainer.textContent =
     'Click "Create Flashcard" to draft flashcards from this tossup.'
+  el.saveAllDraftFlashcardsBtn.classList.add('hidden')
 }
 
 async function loadQuestion(fetcher) {
@@ -709,6 +702,10 @@ el.getManyQuestionsBtn.addEventListener('click', () => {
 
 el.reviewMissedBtn.addEventListener('click', () => {
   if (adaptive) leaveAdaptive()
+  // This same button also serves "next review question" on every click after
+  // the first (see its "Review Next" label below) -- only the transition into
+  // review mode is a new sitting worth zeroing the stats box for.
+  if (!reviewMode) resetSessionStats()
   reviewMode = true
   el.stopReviewBtn.classList.remove('hidden')
   el.reviewMissedBtn.textContent = 'Review Next'
@@ -870,7 +867,7 @@ async function finish({ didBuzz, guess }) {
     }
 
     showResult(result)
-    loadStats()
+    recordSessionAnswer(result)
 
     if (adaptive && result.adaptive?.graded) {
       adaptive.answered += 1
@@ -955,22 +952,39 @@ el.getExplanationBtn.addEventListener('click', async () => {
 function paintDraftCards(cards, category) {
   if (!cards.length) {
     el.draftFlashcardsContainer.textContent = 'No usable cards came back. Try again.'
+    el.saveAllDraftFlashcardsBtn.classList.add('hidden')
     return
   }
   // Each card gets its own Save -- a draft is not all-or-nothing, and the
   // same "half a card is not a card" rule the notebook applies server-side
   // means a player should be able to keep the three good ones and discard a
   // fourth that came back garbled, rather than losing all four to one bad card.
+  // "Save All" (below) is additive on top of that, not a replacement for it.
   el.draftFlashcardsContainer.innerHTML = cards.map((c, i) => `
-    <div data-draft-card="${i}" class="rounded-lg bg-secondary-dark p-3">
-      <p class="font-bold">${escapeHtml(c.term)}</p>
+    <div data-draft-card="${i}" class="relative rounded-lg bg-secondary-dark p-3">
+      <button data-delete-draft="${i}" title="Discard this card" class="absolute right-2 top-2 rounded-full bg-red-700 px-3 py-1 text-xs font-bold text-white hover:bg-red-800">Delete</button>
+      <p class="pr-16 font-bold">${escapeHtml(c.term)}</p>
       <p class="mt-1 text-text-muted">${escapeHtml(c.definition)}</p>
       <button data-save-draft="${i}" class="mt-2 rounded-full bg-green-600 px-3 py-1 text-xs font-bold text-white hover:bg-green-700">Save</button>
     </div>`).join('')
 
+  // Discarded cards drop out of both "still visible" (removed from the DOM)
+  // and "eligible for Save All" (removed here too) -- a deleted draft must
+  // not come back to life the next time the bulk button runs.
+  const savedFlags = cards.map(() => false)
+  const discarded = cards.map(() => false)
+
+  function updateSaveAllVisibility() {
+    const anyPending = cards.some((_, i) => !savedFlags[i] && !discarded[i])
+    el.saveAllDraftFlashcardsBtn.classList.toggle('hidden', !anyPending)
+    el.saveAllDraftFlashcardsBtn.disabled = false
+    el.saveAllDraftFlashcardsBtn.textContent = 'Save All'
+  }
+
   el.draftFlashcardsContainer.querySelectorAll('[data-save-draft]').forEach((btn) => {
     btn.addEventListener('click', async () => {
-      const card = cards[Number(btn.dataset.saveDraft)]
+      const index = Number(btn.dataset.saveDraft)
+      const card = cards[index]
       btn.disabled = true
       btn.textContent = 'Saving…'
       try {
@@ -979,12 +993,54 @@ function paintDraftCards(cards, category) {
           flashcards: [{ term: card.term, definition: card.definition }],
         })
         btn.textContent = 'Saved'
+        savedFlags[index] = true
+        updateSaveAllVisibility()
       } catch (error) {
         btn.textContent = error.message
         btn.disabled = false
       }
     })
   })
+
+  el.draftFlashcardsContainer.querySelectorAll('[data-delete-draft]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const index = Number(btn.dataset.deleteDraft)
+      discarded[index] = true
+      el.draftFlashcardsContainer.querySelector(`[data-draft-card="${index}"]`)?.remove()
+      updateSaveAllVisibility()
+    })
+  })
+
+  el.saveAllDraftFlashcardsBtn.onclick = async () => {
+    const pending = cards
+      .map((card, i) => ({ card, i }))
+      .filter(({ i }) => !savedFlags[i] && !discarded[i])
+    if (!pending.length) return
+    el.saveAllDraftFlashcardsBtn.disabled = true
+    el.saveAllDraftFlashcardsBtn.textContent = 'Saving…'
+    try {
+      await api.saveFlashcards({
+        category, sourceQuestionId: question?.id,
+        flashcards: pending.map(({ card }) => ({ term: card.term, definition: card.definition })),
+      })
+      pending.forEach(({ i }) => {
+        savedFlags[i] = true
+        const cardBtn = el.draftFlashcardsContainer.querySelector(`[data-save-draft="${i}"]`)
+        if (cardBtn) {
+          cardBtn.disabled = true
+          cardBtn.textContent = 'Saved'
+        }
+      })
+      updateSaveAllVisibility()
+    } catch (error) {
+      el.saveAllDraftFlashcardsBtn.disabled = false
+      el.saveAllDraftFlashcardsBtn.textContent = 'Save All'
+      el.draftFlashcardsContainer.insertAdjacentHTML(
+        'beforeend', `<p class="text-red-400">${escapeHtml(error.message)}</p>`)
+    }
+  }
+
+  updateSaveAllVisibility()
 }
 
 el.createFlashcardBtn.addEventListener('click', async () => {
@@ -1009,18 +1065,46 @@ el.createFlashcardBtn.addEventListener('click', async () => {
 
 // ------------------------------------------------------------------- stats --
 
-async function loadStats() {
-  try {
-    const category = chosen(el.categorySelect)[0] ?? ''
-    const { lifetime } = await api.stats(category)
-    el.ptn.textContent = `${lifetime.powers} / ${lifetime.tens} / ${lifetime.negs}`
-    el.tossupsHeard.textContent = lifetime.tossups
-    el.pointsScored.textContent = lifetime.points
-    el.celerity.textContent = lifetime.averageCelerity === null
-      ? '0.000' : lifetime.averageCelerity.toFixed(3)
-  } catch (error) {
-    console.error(error)
+// "Your Stats" is this sitting, not the account's lifetime total -- matching
+// the desktop, whose own `stats` object (renderer.js) is the same kind of
+// in-memory counter. It resets on sign-in/app load (the initial value below),
+// and wherever `resetSessionStats()` is called: starting Adaptive Learning or
+// starting Review Missed. True lifetime totals still exist -- the profile
+// screen reads `api.stats()` directly -- this box just isn't them.
+let sessionStats = { heard: 0, powers: 0, tens: 0, negs: 0, points: 0, celeritySum: 0, correctCount: 0 }
+
+function paintSessionStats() {
+  const avgCelerity = sessionStats.correctCount
+    ? (sessionStats.celeritySum / sessionStats.correctCount).toFixed(3) : '0.000'
+  el.ptn.textContent = `${sessionStats.powers} / ${sessionStats.tens} / ${sessionStats.negs}`
+  el.tossupsHeard.textContent = sessionStats.heard
+  el.pointsScored.textContent = sessionStats.points
+  el.celerity.textContent = avgCelerity
+}
+
+function resetSessionStats() {
+  sessionStats = { heard: 0, powers: 0, tens: 0, negs: 0, points: 0, celeritySum: 0, correctCount: 0 }
+  paintSessionStats()
+}
+
+function recordSessionAnswer(result) {
+  sessionStats.heard += 1
+  sessionStats.points += result.points
+  // Celerity only accumulates for an actual correct buzz -- same as the
+  // desktop's own `stats.celeritySum`/`correctCount`, and the same reason the
+  // server's own lifetime average filters to power/ten and leaves negs out:
+  // a neg's celerity says how early you were wrong, not how well you did.
+  if (result.outcome === 'power' || result.outcome === 'ten') {
+    if (result.outcome === 'power') sessionStats.powers += 1
+    else sessionStats.tens += 1
+    if (result.celerity != null) {
+      sessionStats.celeritySum += result.celerity
+      sessionStats.correctCount += 1
+    }
+  } else if (result.outcome === 'neg') {
+    sessionStats.negs += 1
   }
+  paintSessionStats()
 }
 
 // -------------------------------------------------------- save a highlight --
@@ -1184,6 +1268,7 @@ el.startAdaptiveSessionBtn.addEventListener('click', () => {
       })
 
   if (reviewMode) leaveReview()
+  resetSessionStats()
   adaptive = {
     picks, weights,
     // Its own session id, not the page's. /api/adaptive/end counts the sitting

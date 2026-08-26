@@ -5,19 +5,20 @@
  * these summary rows are the only history there is -- which is why they are
  * written at the end of a sitting rather than derived on the way out here.
  *
- * The one design decision worth stating: **a record does not draw its own
- * stats.** The desktop's records page renders a second copy of the profile
- * charts scoped to one session; here, clicking a record opens the profile
- * itself with a session filter, because the profile already draws those
- * panels and the API already answers them per session. A second set of
- * drawing code for the same five charts is the thing that drifts.
+ * Clicking a record expands its stats inline, in a single detail panel below
+ * the list -- matching the desktop's own records page, and not navigating to
+ * the Profile screen the way this used to. The chart-drawing itself is still
+ * one implementation, not two: `profile.js` exports `initSessionPanels` for
+ * exactly this, reusing the same `PANELS` table and draw functions the
+ * Profile screen uses, just targeting this page's own elements.
  *
  * Not every record can do that. A sitting saved before anything tracked a
  * session id has no answers to point at, so its row says so instead of
- * offering a button that would open an empty page.
+ * offering a button that would open an empty panel.
  */
 
 import { api } from './api.js'
+import { initSessionPanels } from './profile.js'
 
 const $ = (id) => document.getElementById(id)
 
@@ -40,21 +41,61 @@ function when(iso) {
   return Number.isNaN(date.getTime()) ? '' : date.toLocaleString()
 }
 
-export function initRecords({ onBack, onOpenSession }) {
+export function initRecords({ onBack }) {
   const el = {
     screen: $('recordsScreen'), backBtn: $('backFromRecordsBtn'),
     summary: $('recordsSummary'), filter: $('recordsCategoryFilter'),
     list: $('recordsList'), paging: $('recordsPaging'),
+    detail: $('recordsDetail'), detailTitle: $('recordsDetailTitle'),
+    closeDetailBtn: $('closeRecordsDetailBtn'), detailStats: $('recordsDetailStats'),
+    detailPicker: $('recordsDetailPicker'), detailSubPicker: $('recordsDetailSubPicker'),
+    detailPanelTitle: $('recordsDetailPanelTitle'), detailPanelWhat: $('recordsDetailPanelWhat'),
+    detailView: $('recordsDetailView'), detailFinding: $('recordsDetailFinding'),
   }
+
+  const showSessionPanels = initSessionPanels({
+    statPicker: el.detailPicker, statSubPicker: el.detailSubPicker, statView: el.detailView,
+    statAboutTitle: el.detailPanelTitle, statAboutWhat: el.detailPanelWhat,
+    statAboutFinding: el.detailFinding,
+  })
 
   let page = 1
 
   el.backBtn.addEventListener('click', onBack)
   el.filter.addEventListener('change', () => { page = 1; load() })
+  el.closeDetailBtn.addEventListener('click', () => el.detail.classList.add('hidden'))
+
+  async function openDetail(session) {
+    el.detail.classList.remove('hidden')
+    el.detailTitle.textContent = `${session.category} — ${when(session.endedAt)}`
+    el.detail.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+
+    el.detailStats.innerHTML = statTile('Tossups', '…')
+    try {
+      // Points, P/T/N and celerity aren't on the row itself -- only this
+      // sitting's session id is -- so they come from the same session-scoped
+      // lifetime endpoint the old profile-page detour used.
+      const { lifetime } = await api.stats('', session.sessionId)
+      const start = Number(session.startDifficulty ?? 0)
+      const end = Number(session.endDifficulty ?? 0)
+      el.detailStats.innerHTML =
+        statTile('Tossups', lifetime.tossups) +
+        statTile('Points', lifetime.points) +
+        statTile('P / T / N', `${lifetime.powers} / ${lifetime.tens} / ${lifetime.negs}`) +
+        statTile('Avg celerity', lifetime.averageCelerity === null
+          ? '0.000' : lifetime.averageCelerity.toFixed(3)) +
+        statTile('Difficulty', `${start.toFixed(1)} → ${end.toFixed(1)}`)
+    } catch (error) {
+      el.detailStats.innerHTML = `<p class="text-red-400">${escapeHtml(error.message)}</p>`
+    }
+    showSessionPanels(session.sessionId)
+  }
 
   async function load() {
     el.list.innerHTML = '<p class="text-text-muted">Loading records…</p>'
     el.paging.innerHTML = ''
+    // A filtered-out or deleted session can't stay open behind the list.
+    el.detail.classList.add('hidden')
 
     let payload
     try {
@@ -139,11 +180,11 @@ export function initRecords({ onBack, onOpenSession }) {
       // since this is now the row's one interactive purpose beyond Delete.
       node.tabIndex = 0
       node.setAttribute('role', 'button')
-      node.addEventListener('click', () => onOpenSession(session))
+      node.addEventListener('click', () => openDetail(session))
       node.addEventListener('keydown', (event) => {
         if (event.key === 'Enter' || event.key === ' ') {
           event.preventDefault()
-          onOpenSession(session)
+          openDetail(session)
         }
       })
     }

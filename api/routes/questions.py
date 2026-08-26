@@ -221,6 +221,26 @@ def browse():
             query_params + [_BROWSE_PAGE + 1, (page - 1) * _BROWSE_PAGE]
         ).fetchall()
 
+        # "What you answered" for each row, batched the same way the review
+        # queue's own /queue route does -- one query keyed by `= any(%s)`
+        # rather than one round trip per row. An unseen question was never
+        # queued, so it never has anything here.
+        histories = {}
+        ids = [r["id"] for r in rows]
+        if ids:
+            for entry in conn.execute(
+                """select question_id, user_answer, was_correct, celerity, answered_at
+                     from public.review_answers
+                    where user_id = %s and question_id = any(%s)
+                 order by answered_at asc""",
+                (g.user_id, ids)).fetchall():
+                histories.setdefault(entry["question_id"], []).append({
+                    "guess": entry["user_answer"],
+                    "correct": entry["was_correct"],
+                    "celerity": entry["celerity"],
+                    "at": entry["answered_at"].isoformat(),
+                })
+
     # One row over the page size tells us whether there is a next page without
     # a second count(*) over 169k rows -- the count is what makes this kind of
     # screen slow, and nothing on it needs a total.
@@ -228,6 +248,7 @@ def browse():
     items = rows[:_BROWSE_PAGE]
     for row in items:
         row["answer"] = clean_answerline(row["answer"]) if row["answer"] else None
+        row["history"] = histories.get(row["id"], [])
 
     return jsonify({"items": items, "page": page, "hasMore": has_more})
 
