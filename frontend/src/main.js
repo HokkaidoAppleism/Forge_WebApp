@@ -422,12 +422,34 @@ el.voiceModeToggle.addEventListener('change', () => {
   voiceMode = el.voiceModeToggle.checked
   el.showTextRow.classList.toggle('hidden', !voiceMode)
   updateSpeedDisplay()
-  // Switching mode mid-tossup would leave the reader half-spoken and
-  // half-printed, so stop and let the player start the next one cleanly.
-  abandonTossup()
-  el.questionContainer.textContent = voiceMode
-    ? 'Voice Mode on — press "Start Reader" to hear a tossup.'
-    : 'Click "Start Reader" to start practicing'
+
+  const inProgress = words.length > 0 && !buzzed && wordIndex < words.length
+  if (!inProgress) {
+    // Nothing running to carry across. Still say what's true if the reader
+    // is sitting empty; leave a fully-read or already-buzzed tossup alone.
+    if (!words.length) {
+      el.questionContainer.textContent = voiceMode
+        ? 'Voice Mode on — press "Start Reader" to hear a tossup.'
+        : 'Click "Start Reader" to start practicing'
+    }
+    return
+  }
+
+  // A tossup is actively running -- keep it going in the new mode from
+  // wherever it had gotten to, instead of abandoning it outright. The same
+  // "stop whichever mechanism was running, start the other one at the
+  // current word" switch the Resume button already makes.
+  stopTicker()
+  voice.stopSpeaking()
+  if (paused) return // stays paused; Resume picks the right mode up from here
+
+  if (voiceMode && voice.voiceSupported()) {
+    if (!showTossupText) el.questionContainer.textContent = '🔊 Listening…'
+    speakCurrentTossup(wordIndex)
+  } else {
+    paintWords(wordIndex)
+    tick()
+  }
 })
 
 el.showTextToggle.addEventListener('change', () => {
