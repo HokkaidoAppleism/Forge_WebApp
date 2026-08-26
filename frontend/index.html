@@ -308,8 +308,9 @@
             covers all of its subjects.
           </p>
 
-          <!-- One slider per pick, shown only once more than one thing is
-               selected -- with a single pick there is nothing to balance. -->
+          <!-- One typed percentage per pick, shown only once more than one
+               thing is selected -- with a single pick there is nothing to
+               balance. Start Session stays locked until these add to 100. -->
           <div id="adaptiveWeightsWrap" class="mb-4 hidden">
             <div class="mb-2 flex items-baseline justify-between">
               <p class="text-sm font-medium text-[#baa7a1]">How much of each?</p>
@@ -317,7 +318,7 @@
                 class="rounded-full bg-[#3e322e] px-3 py-1 text-xs font-bold text-[#efe0db] hover:bg-[#4b3c37]"
                 title="Share the session evenly between the subjects you picked">Reset split</button>
             </div>
-            <div id="adaptiveWeights" class="space-y-3"></div>
+            <div id="adaptiveWeights" class="space-y-1"></div>
             <p id="adaptiveWeightTotal" class="mt-2 text-xs font-bold text-green-400">Total: 100%</p>
           </div>
 

@@ -1184,7 +1184,22 @@ async function loadAdaptiveCatalogue() {
   return adaptiveCatalogue
 }
 
-/** One weight slider per pick, shown only when there is a split to make. */
+/** An even split across `n` picks that still sums to exactly 100 -- the
+ *  remainder (100 % n) goes to the first picks rather than getting dropped,
+ *  e.g. 3 picks -> 34/33/33, not 33/33/33 (which is 99). */
+function evenPercentages(n) {
+  const base = Math.floor(100 / n)
+  const remainder = 100 - base * n
+  return Array.from({ length: n }, (_, i) => base + (i < remainder ? 1 : 0))
+}
+
+/** One typed percentage per pick, shown only when there is a split to make.
+ *
+ * A slider you drag moves every other pick's *share* out from under it
+ * without touching their own numbers, which reads as the split shifting on
+ * its own. Typing an exact percentage per pick is the opposite: nothing
+ * moves unless you move it, and the total simply has to reach 100 before
+ * Start Session unlocks. */
 function refreshAdaptiveWeights() {
   const picks = chosen(el.adaptiveCategorySelect)
   el.startAdaptiveSessionBtn.disabled = picks.length === 0
@@ -1195,42 +1210,33 @@ function refreshAdaptiveWeights() {
     [...el.adaptiveWeights.querySelectorAll('input')].map((i) => [i.dataset.name, i.value]))
 
   el.adaptiveWeights.innerHTML = ''
-  for (const name of picks) {
+  const evenSplit = evenPercentages(picks.length)
+  picks.forEach((name, i) => {
     const row = document.createElement('div')
+    row.className = 'mt-1 flex items-center justify-between gap-3 text-xs text-[#baa7a1]'
     row.innerHTML = `
-      <div class="flex items-baseline justify-between text-xs text-[#baa7a1]">
-        <span>${escapeHtml(name)}</span>
-        <span data-share class="font-bold text-white"></span>
-      </div>
-      <input type="range" min="0" max="100" step="5"
-             data-name="${escapeHtml(name)}"
-             value="${existing.get(name) ?? 50}"
-             class="mt-1 h-2 w-full cursor-pointer appearance-none rounded-lg bg-[#584741]">`
+      <span class="flex-1 truncate">${escapeHtml(name)}</span>
+      <div class="flex flex-shrink-0 items-center gap-1">
+        <input type="number" min="0" max="100" step="1" inputmode="numeric"
+               data-name="${escapeHtml(name)}"
+               value="${existing.get(name) ?? evenSplit[i]}"
+               class="w-16 rounded-lg border border-[#584741] bg-[#1d1816] p-1 text-right text-white focus:border-[#efe0db] focus:outline-none">
+        <span>%</span>
+      </div>`
     el.adaptiveWeights.append(row)
-  }
+  })
   paintAdaptiveShares()
 }
 
-/** Show each slider as a share of the whole rather than as its raw value.
- *
- * The sliders move independently, so their raw numbers do not add to anything
- * in particular. What the user is actually choosing is a ratio, and the server
- * normalises it the same way -- so showing the normalised share is showing
- * what will happen, and showing "70" next to "70" would not.
- */
+/** Just the running total -- typing doesn't have to land on exactly 100
+ *  before Start Session works. The numbers are sent to the server as relative
+ *  weights either way, so 96 or 104 splits the same as 96/104 scaled to 100
+ *  would; this is a readout, not a gate. */
 function paintAdaptiveShares() {
-  const sliders = [...el.adaptiveWeights.querySelectorAll('input')]
-  const total = sliders.reduce((sum, s) => sum + Number(s.value), 0)
-  for (const slider of sliders) {
-    const share = total > 0 ? Math.round((Number(slider.value) / total) * 100) : 0
-    slider.parentElement.querySelector('[data-share]').textContent = `${share}%`
-  }
-  // All-zero is the one state the server has to fall back on, so say what it
-  // will do rather than letting it look like a session of nothing.
-  el.adaptiveWeightTotal.textContent = total > 0
-    ? 'Shares are relative — they do not need to add to 100.'
-    : 'Everything is at zero, so the split will be even.'
-  el.adaptiveWeightTotal.className = total > 0
+  const inputs = [...el.adaptiveWeights.querySelectorAll('input')]
+  const total = inputs.reduce((sum, i) => sum + (Number(i.value) || 0), 0)
+  el.adaptiveWeightTotal.textContent = `Total: ${total}%`
+  el.adaptiveWeightTotal.className = total === 100
     ? 'mt-2 text-xs font-bold text-green-400'
     : 'mt-2 text-xs font-bold text-[#f6b17a]'
 }
@@ -1238,7 +1244,9 @@ function paintAdaptiveShares() {
 el.adaptiveCategorySelect.addEventListener('change', refreshAdaptiveWeights)
 el.adaptiveWeights.addEventListener('input', paintAdaptiveShares)
 el.resetAdaptiveWeightsBtn.addEventListener('click', () => {
-  for (const slider of el.adaptiveWeights.querySelectorAll('input')) slider.value = 50
+  const inputs = [...el.adaptiveWeights.querySelectorAll('input')]
+  const split = evenPercentages(inputs.length)
+  inputs.forEach((input, i) => { input.value = split[i] })
   paintAdaptiveShares()
 })
 

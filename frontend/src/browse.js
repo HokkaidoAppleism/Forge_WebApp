@@ -30,6 +30,9 @@ const escapeHtml = (text) => String(text ?? '').replace(
 // Matches the server's own floor -- see the module note above.
 const MIN_SEARCH = 3
 const DEBOUNCE_MS = 350
+// Matches the server's own page size (routes/questions.py's _BROWSE_PAGE),
+// needed here only to say which rows a page actually shows.
+const PAGE_SIZE = 25
 
 // Labels and pill colors, ported verbatim from the desktop's BROWSE_BADGES --
 // "Never seen" and "Haven't Reviewed" read as two different facts (never
@@ -306,7 +309,7 @@ export function initBrowse() {
     return node
   }
 
-  function renderPaging({ hasMore }) {
+  function renderPaging({ items, hasMore }) {
     el.paging.innerHTML = ''
     if (page === 1 && !hasMore) return
 
@@ -319,9 +322,15 @@ export function initBrowse() {
       return button
     }
 
+    // "Page 9" nine pages into the full set is 225 of 169,099 -- fine once it
+    // says so, alarming when it doesn't. Matches the desktop's own wording.
+    const first = items.length ? (page - 1) * PAGE_SIZE + 1 : 0
+    const last = (page - 1) * PAGE_SIZE + items.length
     const label = document.createElement('span')
     label.className = 'text-sm text-text-muted'
-    label.textContent = `Page ${page}`
+    label.textContent = items.length
+      ? `Page ${page} · showing ${first}–${last}${hasMore ? '' : ` of ${last}`}`
+      : `Page ${page}`
 
     el.paging.append(step(-1, '← Previous', page <= 1), label,
                      step(1, 'Next →', !hasMore))

@@ -125,4 +125,16 @@
     background: #584741 linear-gradient(0deg, #584741 0%, #584741 100%);
     color: #efe0db;
   }
+
+  /* The Adaptive Learning percentage split: a spin button sitting right next
+     to a number you're trying to type over gets in the way more than it
+     helps -- one stray click increments instead of placing the cursor. */
+  #adaptiveWeights input[type="number"]::-webkit-inner-spin-button,
+  #adaptiveWeights input[type="number"]::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+  #adaptiveWeights input[type="number"] {
+    -moz-appearance: textfield;
+  }
 }
