@@ -216,6 +216,12 @@ function showScreen(name) {
     abandonTossup()
     el.questionContainer.textContent = 'Click “Start Reader” to start practicing'
   }
+  // Settings is a modal, not one of these screens, so it never closed on its
+  // own when a nav button switched screens underneath it -- most visibly
+  // when an AI feature auto-opened it for a missing key and the next click
+  // was Notebook or Records, which left Settings stacked on top of the new
+  // screen with no way to tell the two apart.
+  closeSettings()
   for (const screen of SCREENS) el[screen].classList.toggle('hidden', screen !== name)
 }
 
