@@ -102,5 +102,16 @@ def create_app():
     return app
 
 
+# A plain module-level WSGI object, not just the factory above -- gunicorn's
+# `--factory` flag (what the Procfile used to invoke this with) isn't
+# supported by every gunicorn version, and the deployed one didn't have it:
+# every request 502'd because the process never actually started. `app:app`
+# works on every version there is, so that's what the Procfile calls now.
+app = create_app()
+
 if __name__ == "__main__":
-    create_app().run(host="127.0.0.1", port=5002, debug=True)
+    # threaded=True matters, not just tidiness: the reader fires two requests
+    # on load, and Flask's dev server is single-threaded by default -- under
+    # that default the second request intermittently fails outright rather
+    # than queuing, which reads as a flaky frontend when it's actually this.
+    app.run(host="127.0.0.1", port=5002, debug=True, threaded=True)
