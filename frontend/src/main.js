@@ -345,8 +345,38 @@ async function loadFilters() {
       option.textContent = `${category.category} (${category.questions.toLocaleString()})`
       el.categorySelect.append(option)
     }
+    // The list is rebuilt fresh from the server every sign-in, which used to
+    // mean any category you'd picked reverted to "Any Category" the moment
+    // this ran -- restore whatever was saved, same as the reader's other
+    // preferences.
+    restoreCategoryPrefs()
   } catch (error) {
     console.error(error)
+  }
+}
+
+/** Puts the saved category/subcategory/difficulty picks back after the
+ *  selects are rebuilt -- the multi-selects don't survive being rebuilt
+ *  from scratch, they just start from "Any" every time otherwise. */
+function restoreCategoryPrefs() {
+  let saved = {}
+  try { saved = JSON.parse(localStorage.getItem(PREFS)) ?? {} } catch { saved = {} }
+
+  if (saved.categories?.length) {
+    for (const option of el.categorySelect.options) {
+      option.selected = saved.categories.includes(option.value)
+    }
+  }
+  refreshSubcategories()
+  if (saved.subcategories?.length) {
+    for (const option of el.subcategorySelect.options) {
+      option.selected = saved.subcategories.includes(option.value)
+    }
+  }
+  if (saved.difficulties?.length) {
+    for (const option of el.difficultySelect.options) {
+      option.selected = saved.difficulties.includes(option.value)
+    }
   }
 }
 
@@ -372,7 +402,9 @@ function refreshSubcategories() {
   el.subcategoryWrapper.classList.toggle('hidden', available.length === 0)
 }
 
-el.categorySelect.addEventListener('change', refreshSubcategories)
+el.categorySelect.addEventListener('change', () => { refreshSubcategories(); savePrefs() })
+el.subcategorySelect.addEventListener('change', savePrefs)
+el.difficultySelect.addEventListener('change', savePrefs)
 
 /** What the reader should ask for. Subcategory wins over category when set:
  *  picking "American Literature" under "Literature" means the narrower one. */
@@ -659,6 +691,20 @@ async function loadQuestion(fetcher) {
     return
   }
 
+  // The queue isn't empty, but nothing in it is actually due yet -- the
+  // server still offers the soonest-scheduled one so a player who wants to
+  // get ahead can, but Review Missed serving *any* question the moment
+  // there's nothing due read as "it reviews even when there's nothing to
+  // review." Leaving review mode here instead of showing that question
+  // means clicking Review Missed only ever serves something that's actually
+  // due.
+  if (reviewMode && question.is_due === false) {
+    question = null
+    el.questionContainer.textContent = 'Nothing is due for review right now — check back later.'
+    leaveReview()
+    return
+  }
+
   words = String(question.question).split(/\s+/).filter(Boolean)
   // 41% of the set has no powermark, and the mark can be fused to punctuation
   // ("beta,(*)"), so this looks for it inside a word rather than as a word --
@@ -691,13 +737,6 @@ async function loadQuestion(fetcher) {
     }
   }
 
-  // Review serves whatever is scheduled soonest when nothing is actually due,
-  // and says so rather than pretending the schedule was met.
-  if (reviewMode && question.is_due === false) {
-    el.reviewAheadNotice.textContent =
-      'Nothing is due yet — this one is scheduled ahead of time.'
-    el.reviewAheadNotice.classList.remove('hidden')
-  }
 
   el.submitAnswerBtn.disabled = false
   el.getExplanationBtn.disabled = false
@@ -1420,6 +1459,9 @@ function savePrefs() {
     readingSpeed: Number(el.readingSpeed.value),
     powermark: el.powerHighlightToggle.checked,
     allowRebuzz: el.allowRebuzzToggle.checked,
+    categories: chosen(el.categorySelect),
+    subcategories: chosen(el.subcategorySelect),
+    difficulties: chosen(el.difficultySelect),
   }))
 }
 
