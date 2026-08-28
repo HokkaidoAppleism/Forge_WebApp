@@ -165,14 +165,30 @@ def generate_guide():
     Highlight is presumably worth keeping in the guide it produces, where a
     generated flashcard is disposable draft the desktop always let you
     discard. Ported the same way the split itself was: kept, not re-decided.
+
+    **Three phases, not one transaction.** This route used to hold the
+    connection open across the Gemini call, unlike its three siblings above --
+    which is the mistake their own comments exist to warn about, and it is
+    worst here: a guide is built from *every* clue the account has saved, so
+    it is the longest-running model call in the app, and there is no timeout
+    on it. The pool is eight connections (`db.py`), so eight concurrent guide
+    generations would pin all of them and stall every other request in the
+    API, including ones that have nothing to do with the notebook. Same shape
+    `routes/stats.py`'s `knowledge_depth` already uses: read, call, write.
     """
     payload = request.get_json(silent=True) or {}
     category = (payload.get("category") or "").strip()
     if not category:
         return jsonify({"error": "A category is required."}), 400
 
+    everything = category.lower() == "all"
+
+    # ------------------------------------------- phase 1: read (short tx) ---
+    # `resolve_bare_category` runs here too rather than after the model call,
+    # so the second transaction below is nothing but the insert. It reads the
+    # shared question set, which the Gemini response cannot change.
     with db.user_tx(g.user_id) as conn:
-        if category.lower() == "all":
+        if everything:
             clues = conn.execute(
                 "select clue_text, answer_text from public.user_clues "
                 "where user_id = %s order by created_at desc",
@@ -184,7 +200,7 @@ def generate_guide():
                 (g.user_id, category)).fetchall()
 
         if not clues:
-            scope = "" if category.lower() == "all" else f" in {category}"
+            scope = "" if everything else f" in {category}"
             return jsonify({
                 "empty": True,
                 "error": f"No saved clues{scope} yet. While reading a tossup, "
@@ -197,28 +213,31 @@ def generate_guide():
         if error:
             return error
 
-        formatted = [f"Clue: {row['clue_text']}\nAnswer: {row['answer_text']}"
-                     for row in clues]
-        try:
-            content = getter.get_notes_from_clues("\n".join(formatted))
-        except ai.AIError as e:
-            return jsonify({"error": str(e)}), 502
-
-        answer_text = notebook.derive_title_from_content(content)
-        if notebook.looks_like_intro_sentence(answer_text):
-            answer_text = None
-        answer_text = clean_answerline(answer_text) or None
-
         # "all" is not a real shelf -- resolve_bare_category would file it
         # under a category literally named "all". The clues themselves came
         # from as many real categories as the player has saved to, so there
         # is no single one to file an "all" guide under; General is the same
         # honest fallback the desktop's own bare-save path uses.
         filed_category, subcategory = (
-            (None, None) if category.lower() == "all"
+            (None, None) if everything
             else notebook.resolve_bare_category(conn, category))
         filed_category = filed_category or "General"
 
+    # ------------------------------- phase 2: the model call, no tx open ---
+    formatted = [f"Clue: {row['clue_text']}\nAnswer: {row['answer_text']}"
+                 for row in clues]
+    try:
+        content = getter.get_notes_from_clues("\n".join(formatted))
+    except ai.AIError as e:
+        return jsonify({"error": str(e)}), 502
+
+    answer_text = notebook.derive_title_from_content(content)
+    if notebook.looks_like_intro_sentence(answer_text):
+        answer_text = None
+    answer_text = clean_answerline(answer_text) or None
+
+    # ------------------------------------------ phase 3: write (short tx) ---
+    with db.user_tx(g.user_id) as conn:
         note = conn.execute(
             """insert into public.notebook_notes
                    (user_id, notes_content, category, subcategory, answer_text)

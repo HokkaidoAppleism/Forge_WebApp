@@ -265,6 +265,57 @@ def one_question(question_id):
     return jsonify(row)
 
 
+# The picker's own category tree, computed once per process.
+#
+# This is the third cache of its kind in the API and it is safe for the same
+# reason the other two are (`adaptive.cluster_counts`, `stats._tier_labels`):
+# it is derived from the shared, read-only question set, so it is identical
+# for every user and only changes when the question database is replaced.
+# Caching anything *per user* in module state is the mistake that makes the
+# desktop adaptive session unable to survive a second worker -- see
+# adaptive.py. This is not that.
+#
+# Worth having rather than merely tidy. The query groups all 169,099 rows of a
+# 194 MB table and no index covers `(category, subcategory)` -- the three
+# `questions_*_rand_idx` indexes each lead with a different column -- so it is
+# a sequential scan of the whole table, the same shape as the un-indexed
+# `answer ilike` search that measured ~1.9 s before 0006 added its index. And
+# it runs on the critical path of opening the app: the reader's category and
+# difficulty boxes stay empty until it answers. Cached, every request after
+# the first does no database work at all and never borrows a pooled
+# connection.
+_filter_tree = None
+
+
+def filter_tree():
+    """Every category and subcategory the picker should offer, with counts."""
+    global _filter_tree
+    if _filter_tree is None:
+        with db.content_tx() as conn:
+            rows = conn.execute(
+                """select category, subcategory, count(*) as questions
+                     from public.questions
+                    where category is not null
+                 group by category, subcategory
+                   having count(*) >= 50
+                 order by category, subcategory"""
+            ).fetchall()
+
+        grouped = {}
+        for row in rows:
+            bucket = grouped.setdefault(
+                row["category"], {"category": row["category"], "questions": 0,
+                                  "subcategories": []})
+            bucket["questions"] += row["questions"]
+            # A subcategory that merely repeats its category is not a shelf.
+            if row["subcategory"] and row["subcategory"] != row["category"]:
+                bucket["subcategories"].append(
+                    {"name": row["subcategory"], "questions": row["questions"]})
+
+        _filter_tree = list(grouped.values())
+    return _filter_tree
+
+
 @bp.get("/filters")
 @require_user
 def filters():
@@ -277,26 +328,8 @@ def filters():
 
     The minimum count drops the handful of mislabelled rows in the question
     set, which otherwise file Ancient History under Fine Arts.
+
+    Cached per process (see `filter_tree`), so only the first request after a
+    deploy pays for the scan.
     """
-    with db.content_tx() as conn:
-        rows = conn.execute(
-            """select category, subcategory, count(*) as questions
-                 from public.questions
-                where category is not null
-             group by category, subcategory
-               having count(*) >= 50
-             order by category, subcategory"""
-        ).fetchall()
-
-    grouped = {}
-    for row in rows:
-        bucket = grouped.setdefault(
-            row["category"], {"category": row["category"], "questions": 0,
-                              "subcategories": []})
-        bucket["questions"] += row["questions"]
-        # A subcategory that merely repeats its category is not a shelf.
-        if row["subcategory"] and row["subcategory"] != row["category"]:
-            bucket["subcategories"].append(
-                {"name": row["subcategory"], "questions": row["questions"]})
-
-    return jsonify({"categories": list(grouped.values())})
+    return jsonify({"categories": filter_tree()})

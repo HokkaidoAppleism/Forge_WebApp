@@ -18,10 +18,22 @@ class user:
         # field to the payload.
         #self.user_data['Visual Fine Arts']
 
-    def update_skill(self, user_skill, question_difficulty, correct, K=0.5, celerity = 0):
-        expected = 1 / (1 + np.exp(-(user_skill - question_difficulty)))
-        actual = 1 if correct else 0
-        new_skill = user_skill + K * (actual - expected) * (1 + celerity)#new measure
+    def update_skill(self, user_skill, question_difficulty, correct,
+                     K=1.5, S=2.0, celerity=0):
+        # Bug 2 fix. `celerity` is the fraction of the tossup still unread at the
+        # buzz (1.0 = first word, ~0 = last line). The old formula only let
+        # celerity scale the *size* of a move, never its sign, so converting a
+        # question on its very last word still raised skill. Now we compare the
+        # player's actual buzz point against the buzz point a player at this
+        # skill "should" convert this difficulty at (`expected_celerity`): buzz
+        # earlier than expected -> skill goes up, later -> it goes down.
+        # S controls how sharply that crossover shifts with the skill/difficulty
+        # gap; K is the same move-size knob as before, retuned upward because
+        # (actual - expected_celerity) has a smaller natural range than the old
+        # (1 + celerity) multiplier did.
+        expected_celerity = 1 / (1 + np.exp(-(user_skill - question_difficulty) / S))
+        actual = celerity if correct else 0.0
+        new_skill = user_skill + K * (actual - expected_celerity)
         return max(0.0, min(10.0, new_skill))  # Clamp between 0–10
 
     def update_stats(self, qid, category, cluster_id, correct, question_difficulty, celerity):
@@ -31,9 +43,11 @@ class user:
         if category not in self.user_data:
             self.user_data[category] = {}
         if cluster_id not in self.user_data[category] and cluster_id != -1:
-            self.user_data[category][cluster_id] = self.reported_skill#consider changing based off survey
+            # Seed a brand-new cluster at the player's running mean skill, not
+            # the frozen reported_skill -- same reasoning as get_skill below.
+            self.user_data[category][cluster_id] = self.overall_skill()
         if cluster_id == -1:
-            self.random_skill = self.update_skill(self.random_skill, question_difficulty, correct, K=0.5, celerity = celerity)
+            self.random_skill = self.update_skill(self.random_skill, question_difficulty, correct, celerity=celerity)
             self.recently_seen.append(qid)
             return
         #add something that incudes speed into this also tweak how fast this happens -- maybe *0.5
@@ -42,8 +56,30 @@ class user:
         self.user_data[category][cluster_id] = new_skill
         self.recently_seen.append(qid)
 
+    def overall_skill(self):
+        """Running mean skill across every cluster that has any data.
+
+        Bug 1 fix / display metric. Used both as the fallback for a cluster the
+        player has never answered (so the recommender serves it near where the
+        player actually sits, not frozen at the session's starting skill) and
+        as the single "Current Skill" number shown to the player, which
+        otherwise jumped around with whichever cluster the current question
+        happened to belong to. Same shape as the end_difficulty calculation in
+        routes/adaptive.py's /end handler.
+        """
+        vals = [s for clusters in self.user_data.values()
+                for s in clusters.values()]
+        return sum(vals) / len(vals) if vals else self.reported_skill
+
     def get_skill(self, category, cluster_id):
-        return self.user_data.get(category, {}).get(cluster_id, self.reported_skill)
+        cluster = self.user_data.get(category, {})
+        if cluster_id in cluster:
+            return cluster[cluster_id]
+        # No answer recorded for this cluster yet: fall back to the mean of the
+        # clusters that do have data rather than the frozen reported_skill. The
+        # first question of a fresh session still gets reported_skill, because
+        # overall_skill() has nothing to average yet.
+        return self.overall_skill()
 
     def get_random_skill(self):
         return self.random_skill

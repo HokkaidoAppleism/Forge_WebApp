@@ -100,8 +100,21 @@ def summary():
                                                  when 'ten'   then 10
                                                  when 'neg'   then -5
                                                  else 0 end), 0)             as points,
+                       -- Correct buzzes only. This used to include negs,
+                       -- which made "Avg celerity" mean one thing in the
+                       -- reader's own session box (correct-only, on both
+                       -- clients) and another on the profile and the records
+                       -- page, under the same label. Two comments already
+                       -- asserted this filter as fact -- panels.buzzpoints's
+                       -- docstring and main.js's recordSessionAnswer, which
+                       -- says it leaves negs out "for the same reason the
+                       -- server's own lifetime average" does -- so the SQL
+                       -- was the outlier, not the intent. A neg's celerity
+                       -- says how early you were wrong, not how well you
+                       -- played, and averaging the two together pulls the
+                       -- figure toward whoever negs earliest.
                        avg(celerity) filter (
-                           where outcome in ('power', 'ten', 'neg'))         as avg_celerity
+                           where outcome in ('power', 'ten'))                as avg_celerity
                   from public.user_stats
                  where user_id = %s {clause}""",
             [g.user_id] + params).fetchone()

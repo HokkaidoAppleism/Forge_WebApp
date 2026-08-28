@@ -1422,22 +1422,62 @@ export function initProfile(el) {
     loadProgress()
   })
 
+  /** Rebuild the category filter from what this account has actually played.
+   *
+   *  It used to be handed the reader's own list -- every category in the
+   *  question library -- which offered subjects the player had never touched,
+   *  and picking one opened a profile with nothing on it. `played-categories`
+   *  is the route the desktop has always used for this, and it answers the
+   *  question the filter is actually asking: not "what exists" but "what have
+   *  you answered". It also returns *sub*categories, which the library list
+   *  never surfaced here even though the server's own `_scope()` matches
+   *  either level -- so the web filter could not scope to a shelf at all.
+   *
+   *  Fails soft: the panels below do not depend on this list, so a failed
+   *  request leaves "Every category" selectable rather than blanking a page
+   *  whose numbers loaded fine. */
+  async function loadCategoryFilter() {
+    const chosen = el.profileCategoryFilter.value
+    let played = { categories: [], subcategories: [] }
+    try {
+      played = await api.playedCategories()
+    } catch (error) {
+      console.error(error)
+    }
+
+    el.profileCategoryFilter.innerHTML = '<option value="">Every category</option>'
+    const add = (name, answers, indent) => {
+      const option = document.createElement('option')
+      option.value = name
+      // Counts, and an indent on the shelves, so the two levels read as a
+      // hierarchy in a flat <select> -- the desktop marks the same split with
+      // an opacity change on its filter buttons.
+      option.textContent = `${indent ? '  ' : ''}${name} (${answers})`
+      el.profileCategoryFilter.append(option)
+    }
+    for (const c of played.categories ?? []) add(c.name, c.answers, false)
+    for (const s of played.subcategories ?? []) add(s.name, s.answers, true)
+
+    // A filter that is no longer on the list -- every answer in it was just
+    // reset -- falls back to "Every category" rather than staying selected on
+    // an option that no longer exists.
+    el.profileCategoryFilter.value = chosen
+    if (el.profileCategoryFilter.value !== chosen) {
+      el.profileCategoryFilter.value = ''
+    }
+  }
+
   /** Called every time the page is opened, so it never shows stale numbers
    *  from before the last session's answers. `scope` is a saved Adaptive
    *  Learning record when the records page opened it, and null otherwise. */
-  return function showProfile(categories, scope = null) {
+  return function showProfile(scope = null) {
     session = scope
     if (session) month = null
 
-    const chosen = el.profileCategoryFilter.value
-    el.profileCategoryFilter.innerHTML = '<option value="">Every category</option>'
-    for (const category of categories) {
-      const option = document.createElement('option')
-      option.value = category.category
-      option.textContent = category.category
-      el.profileCategoryFilter.append(option)
-    }
-    el.profileCategoryFilter.value = chosen
+    // Not awaited: the filter is a control, not a prerequisite for the
+    // numbers, and blocking the whole page on it would make opening the
+    // profile wait for a request nothing on screen needs yet.
+    loadCategoryFilter()
 
     applyScope()
     pickerButtons()

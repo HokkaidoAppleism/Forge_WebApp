@@ -196,6 +196,24 @@ def log_answer():
 _VALID_OUTCOMES = ("power", "ten", "neg", "pass")
 
 
+def _declare_duplicate(outcome):
+    """The answer to a repeat of an already-recorded `declare` call.
+
+    `review` and `adaptive` come back null rather than replayed: both describe
+    what *this* request changed, and a duplicate changed nothing. Filling them
+    in from the original write would report a review reschedule and a skill
+    update that did not happen on this call.
+    """
+    return {
+        "success": True,
+        "outcome": outcome,
+        "points": scoring.points_for(outcome),
+        "review": None,
+        "adaptive": None,
+        "duplicate": True,
+    }
+
+
 @bp.post("/answers/declare")
 @require_user
 def declare_answer():
@@ -219,6 +237,17 @@ def declare_answer():
     their own outcome here costs them nothing they could not already get by
     editing their own copy of the desktop app; this route does not create
     that ability, it just gives it a name.
+
+    **`clientAnswerId` works here too.** 0007_answer_idempotency.sql added the
+    key for `POST /api/answers` and explicitly left this route out as "a
+    different, self-reported path with its own considerations" -- but the
+    failure it guards against has nothing to do with who scored the answer. A
+    network retry, a double submit, or the client's own guard being wrong
+    writes two `user_stats` rows and two review attempts here exactly as it
+    would there, and the desktop is the client whose comment records that
+    incident actually happening. The column is nullable and the index partial,
+    so a desktop build that has not been rebuilt yet sends nothing and behaves
+    exactly as before.
     """
     payload = request.get_json(silent=True) or {}
     question_id = payload.get("questionId")
@@ -233,27 +262,56 @@ def declare_answer():
     if celerity is not None and not isinstance(celerity, (int, float)):
         return jsonify({"error": "celerity must be a number."}), 400
 
+    client_answer_id = payload.get("clientAnswerId")
+    if client_answer_id is not None and not isinstance(client_answer_id, str):
+        return jsonify({"error": "clientAnswerId must be a string."}), 400
+
     submission_ms = payload.get("submissionTimeMs")
     scored_offline = payload.get("scoredOffline")
     guess = payload.get("userAnswer")
 
-    with db.user_tx(g.user_id) as conn:
-        # Category and subcategory still come off the question row, never off
-        # the request -- an adaptive session on the desktop names a session by
-        # subcategory where the reader sends the parent category, and trusting
-        # whichever one the client happened to send is the exact bug
-        # `notebook.canonical_category` exists to close off on the web side.
-        question = conn.execute(
-            "select id, category, subcategory, difficulty, cluster_label "
-            "from public.questions where id = %s", (question_id,)).fetchone()
-        if question is None:
-            return jsonify({"error": "No question with that id."}), 404
+    try:
+        with db.user_tx(g.user_id) as conn:
+            # Category and subcategory still come off the question row, never off
+            # the request -- an adaptive session on the desktop names a session by
+            # subcategory where the reader sends the parent category, and trusting
+            # whichever one the client happened to send is the exact bug
+            # `notebook.canonical_category` exists to close off on the web side.
+            question = conn.execute(
+                "select id, category, subcategory, difficulty, cluster_label "
+                "from public.questions where id = %s", (question_id,)).fetchone()
+            if question is None:
+                return jsonify({"error": "No question with that id."}), 404
 
-        review, adaptive_result = _record_outcome(
-            conn, g.user_id, question, session_id, outcome, celerity,
-            submission_ms if isinstance(submission_ms, int) else None,
-            bool(scored_offline) if scored_offline is not None else None,
-            guess, payload.get("timezone"), payload.get("adaptive"))
+            # Answered from the stored row, so a duplicate can never reach
+            # `_record_outcome` and write a second time -- same shape, and the
+            # same reasoning, as `log_answer` above.
+            if client_answer_id:
+                existing = conn.execute(
+                    "select outcome from public.user_stats "
+                    "where user_id = %s and client_answer_id = %s",
+                    (g.user_id, client_answer_id)).fetchone()
+                if existing is not None:
+                    return jsonify(_declare_duplicate(existing["outcome"]))
+
+            review, adaptive_result = _record_outcome(
+                conn, g.user_id, question, session_id, outcome, celerity,
+                submission_ms if isinstance(submission_ms, int) else None,
+                bool(scored_offline) if scored_offline is not None else None,
+                guess, payload.get("timezone"), payload.get("adaptive"),
+                client_answer_id)
+    except psycopg.errors.UniqueViolation:
+        # The true race the existence check above cannot catch: both requests
+        # read "not there yet" before either wrote. The whole transaction
+        # rolled back on the constraint, so nothing partial was written and
+        # this is the sequential-duplicate case one request behind.
+        with db.user_tx(g.user_id) as conn:
+            existing = conn.execute(
+                "select outcome from public.user_stats "
+                "where user_id = %s and client_answer_id = %s",
+                (g.user_id, client_answer_id)).fetchone()
+        return jsonify(_declare_duplicate(
+            existing["outcome"] if existing else outcome))
 
     return jsonify({
         "success": True,
@@ -365,9 +423,10 @@ def _apply_to_skill_model(conn, user_id, adaptive_payload, question,
         return None
 
     # A dead tossup is not an attempt. Grading one would move the skill model
-    # for a question nobody tried, and `update_stats` multiplies by
-    # `(1 + celerity)` -- which is not arithmetic that survives a null buzz
-    # point anyway.
+    # for a question nobody tried, and `update_stats` now compares the buzz
+    # point against an expected one -- so a null buzz point would be read as
+    # "converted on the last word" and pull the skill estimate down for a
+    # question that was never answered at all.
     if outcome not in ("power", "ten", "neg"):
         return {"graded": False, "reason": "no buzz"}
 
@@ -388,7 +447,10 @@ def _apply_to_skill_model(conn, user_id, adaptive_payload, question,
         "graded": True,
         "subcategory": subcategory,
         "clusterId": int(cluster),
-        "skill": round(model.get_skill(subcategory, int(cluster)), 2),
+        # Running mean across every cluster with data (see routes/adaptive.py) --
+        # the "Current Skill" the player sees should not lurch with each
+        # question's cluster.
+        "skill": round(model.overall_skill(), 2),
     }
 
 

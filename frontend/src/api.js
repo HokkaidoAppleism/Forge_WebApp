@@ -78,7 +78,13 @@ async function download(path, options) {
   document.body.appendChild(link)
   link.click()
   link.remove()
-  URL.revokeObjectURL(objectUrl)
+  // Revoked on a later turn of the event loop, not immediately after click().
+  // The download reads from the object URL asynchronously, so revoking it in
+  // the same tick is a race the browser is allowed to lose -- Chrome tends to
+  // win it, Firefox has historically not, and losing it means the click does
+  // nothing at all with no error to show for it. A minute is far longer than
+  // any handoff needs and still frees the blob.
+  setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000)
 }
 
 export class ApiError extends Error {
@@ -204,6 +210,15 @@ export const api = {
     call('/api/stats/knowledge-depth', { params: { category } }),
   progress: (category, month) =>
     call('/api/stats/progress', { params: { category, month } }),
+
+  // What the Profile's own category filter should offer: only what this
+  // account has actually answered, at BOTH levels, with counts. Distinct from
+  // `filters()` above, which lists every category in the 169k-question
+  // library -- right for the reader's picker, wrong here, because it offers
+  // subjects you have never played and those open a blank profile. The
+  // desktop has always used this route (`/profile/categories`); the web
+  // frontend was still building its filter from the library list.
+  playedCategories: () => call('/api/stats/played-categories'),
 
   // Built for the desktop backfill (see NEXT_SESSION_PROMPT_DESKTOP_CLOUD.md)
   // but never wired into this picker until now -- the routes always existed.

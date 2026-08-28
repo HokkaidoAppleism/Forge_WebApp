@@ -128,6 +128,17 @@ let submitting = false  // guards double-submit; see finish()
 let reviewMode = false
 let filters = []        // the category tree from /api/questions/filters
 
+// Both localStorage keys live up here with the state they guard, not beside
+// the functions that read them. `onAuthStateChange` fires during module
+// evaluation (Supabase emits INITIAL_SESSION immediately), and everything it
+// reaches has to be initialised by then -- a `const` declared further down is
+// still in its temporal dead zone at that point and throws. Two real crashes
+// have already come from exactly this; see the note above `countdownInterval`.
+const PREFS = 'forgeqb.prefs'
+// Last known category tree, so the reader's boxes can be filled in on the
+// first paint instead of after a round trip. See `loadFilters`.
+const FILTERS_CACHE = 'forgeqb.filters.v1' 
+
 // Adaptive Learning. `adaptive` is null outside a session and otherwise holds
 // the picks, their weights and the running session totals. The skill model
 // itself lives in Postgres, not here -- the browser is told the current number
@@ -229,7 +240,7 @@ function openReader() { showScreen('readerScreen') }
 
 el.profileBtn.addEventListener('click', () => {
   showScreen('profileScreen')
-  showProfile(filters)
+  showProfile()
 })
 
 // ---------------------------------------------------- records and review --
@@ -306,7 +317,7 @@ el.confirmResetStatsBtn.addEventListener('click', async () => {
     // too, since a fresh account-wide start is exactly what a new session is.
     resetSessionStats()
     if (!el.profileScreen.classList.contains('hidden')) {
-      showProfile(filters)
+      showProfile()
     }
   } catch (error) {
     el.resetStatsMessage.textContent = error.message
@@ -334,23 +345,60 @@ function chosen(select) {
   return [...select.selectedOptions].map((o) => o.value).filter(Boolean)
 }
 
+/** Fill the category select from a tree, and put the saved picks back.
+ *
+ *  The list is rebuilt from scratch each time, which used to mean any category
+ *  you had picked reverted to "Any Category" the moment it ran -- so the saved
+ *  picks are restored immediately after, same as the reader's other
+ *  preferences.
+ */
+function paintFilters(tree) {
+  filters = tree
+  el.categorySelect.innerHTML = '<option value="" selected>Any Category</option>'
+  for (const category of filters) {
+    const option = document.createElement('option')
+    option.value = category.category
+    option.textContent = `${category.category} (${category.questions.toLocaleString()})`
+    el.categorySelect.append(option)
+  }
+  restoreCategoryPrefs()
+}
+
+/** The category tree, painted from the last known copy first and refreshed
+ *  from the server behind it.
+ *
+ *  The tree is a property of the question set, not of the account: it is the
+ *  same for everybody and only changes when the question database is replaced.
+ *  So there is no reason for the reader's category, subcategory and difficulty
+ *  boxes to sit empty for a whole round trip -- Supabase has to settle the
+ *  session before `api.filters()` can even be sent, and the request itself
+ *  crosses the internet to Postgres. Painting the cached copy first fills them
+ *  on the very first frame of every visit after the first; the request still
+ *  goes out and repaints if anything actually changed.
+ *
+ *  Repainting is skipped when the server's answer matches what was already
+ *  drawn, because a repaint rebuilds the <select> and would visibly reset a
+ *  selection the player had already started making in the meantime.
+ */
 async function loadFilters() {
+  let cached = null
+  try { cached = JSON.parse(localStorage.getItem(FILTERS_CACHE)) } catch { cached = null }
+  if (Array.isArray(cached) && cached.length) paintFilters(cached)
+
   try {
     const payload = await api.filters()
-    filters = payload.categories
-    el.categorySelect.innerHTML = '<option value="" selected>Any Category</option>'
-    for (const category of filters) {
-      const option = document.createElement('option')
-      option.value = category.category
-      option.textContent = `${category.category} (${category.questions.toLocaleString()})`
-      el.categorySelect.append(option)
+    const fresh = payload.categories
+    const serialised = JSON.stringify(fresh)
+    if (serialised !== JSON.stringify(cached)) {
+      paintFilters(fresh)
+      // Written after a successful paint, so a shape this build cannot render
+      // is never the thing cached for next time.
+      try { localStorage.setItem(FILTERS_CACHE, serialised) } catch { /* full or blocked */ }
     }
-    // The list is rebuilt fresh from the server every sign-in, which used to
-    // mean any category you'd picked reverted to "Any Category" the moment
-    // this ran -- restore whatever was saved, same as the reader's other
-    // preferences.
-    restoreCategoryPrefs()
   } catch (error) {
+    // A cached tree already on screen is a working picker, so a failed refresh
+    // is not worth surfacing -- the reader itself will report the problem on
+    // the next question it tries to fetch.
     console.error(error)
   }
 }
@@ -1430,10 +1478,11 @@ function paintShortcutLists() {
 }
 paintShortcutLists()
 
-// Font size and the shortcut switch are local prefs, kept in localStorage.
-// The Gemini API key is not: it is a per-account secret, so it round-trips
-// through the server on every open/save -- see aiSettings.js.
-const PREFS = 'forgeqb.prefs'
+// Font size and the shortcut switch are local prefs, kept in localStorage
+// under PREFS, which is declared with the rest of the state at the top of this
+// file -- see the note there. The Gemini API key is not: it is a per-account
+// secret, so it round-trips through the server on every open/save -- see
+// aiSettings.js.
 
 function loadPrefs() {
   let saved = {}

@@ -264,10 +264,17 @@ def merge_notes():
         return jsonify({"error": "Select at least two notes to merge."}), 400
 
     with db.user_tx(g.user_id) as conn:
+        # `order by id`: without it the row order for `id = any(...)` is
+        # whatever Postgres finds convenient, and `sources[0]` below decides
+        # which shelf the guide lands on when the selection spans more than
+        # one. Merging the same notes twice could file the guide differently
+        # each time, for no reason the player could see. Ordering by id makes
+        # it the oldest selected note's category, every time.
         rows = conn.execute(
             """select id, notes_content, answer_text, difficulty, category, is_merged
                  from public.notebook_notes
-                where id = any(%s) and user_id = %s""",
+                where id = any(%s) and user_id = %s
+             order by id""",
             (note_ids, g.user_id)).fetchall()
         if not rows:
             return jsonify({"error": "None of those notes exist."}), 404

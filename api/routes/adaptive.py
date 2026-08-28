@@ -129,7 +129,10 @@ def question():
             "subcategory": subcategory,
             "clusterId": cluster,
             "difficultyRange": difficulty_range,
-            "skill": round(model.get_skill(subcategory, cluster), 2),
+            # The running mean across every cluster with data, not this one
+            # cluster's number -- the per-cluster value visibly jumped around
+            # question to question even though nothing about the player changed.
+            "skill": round(model.overall_skill(), 2),
             "questionsServed": served + 1,
             "resumed": resumed,
         },
