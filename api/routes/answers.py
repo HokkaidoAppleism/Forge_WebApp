@@ -381,16 +381,18 @@ def _record_outcome(conn, user_id, question, session_id, outcome, celerity,
          float(celerity) if has_celerity else 0.0,
          has_celerity))
 
-    # Every neg files the question into the review list on its own. `do
-    # nothing` on conflict rather than an update: a question already in the
-    # queue keeps the schedule it has earned, and `source` records how it
-    # first got here, which a re-neg should not rewrite.
-    if outcome == "neg":
-        conn.execute(
-            "insert into public.review_queue (user_id, question_id, source) "
-            "values (%s, %s, 'missed') on conflict do nothing",
-            (user_id, question["id"]))
-
+    # A neg no longer files the question into the review list on its own.
+    # Aaron asked for this: the review list is what you *chose* to drill, not
+    # an automatic record of every miss, which filled it faster than anyone
+    # works through it. "Add to Missed" (both readers, on every closed-out
+    # tossup) is now the only way in, alongside the manual bookmark button --
+    # both land here as `POST /api/review/add`, `source = 'manual'`.
+    #
+    # `_apply_to_review_queue` still runs on a neg, but it only does anything
+    # when the question is *already* in the queue: missing one you are
+    # actively reviewing still resets its streak and reschedules it. A neg on
+    # a question that was never added is now a no-op here, and `review` comes
+    # back None.
     review = _apply_to_review_queue(
         conn, user_id, question["id"], outcome, was_correct, celerity, guess)
 
