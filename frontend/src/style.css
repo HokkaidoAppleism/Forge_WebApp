@@ -83,6 +83,20 @@
     padding: 0 0.15em;
   }
 
+  /* The ❓ that follows each finished sentence once a tossup has read out.
+     Given a cursor and a hover growth so it reads as a control rather than as
+     punctuation; same class name and same behaviour as the desktop's. */
+  .explanation-icon {
+    display: inline-block;
+    margin-left: 2px;
+    cursor: pointer;
+    transition: transform 0.15s ease-in-out;
+  }
+
+  .explanation-icon:hover {
+    transform: scale(1.25);
+  }
+
   /* Power highlighting switched off. Done as a class on <body> rather than by
      changing what the reader emits, so the toggle applies to the tossup
      already on screen instead of only to the next one. */

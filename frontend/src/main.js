@@ -87,6 +87,7 @@ const el = {
   submitAnswerBtn: $('submitAnswerBtn'), answerFeedback: $('answerFeedback'),
   addToMissedBtn: $('addToMissedBtn'),
   getExplanationBtn: $('getExplanationBtn'), explanationContainer: $('explanationContainer'),
+  sentenceExplanationContainer: $('sentenceExplanationContainer'),
   createFlashcardBtn: $('createFlashcardBtn'), draftFlashcardsContainer: $('draftFlashcardsContainer'),
   saveAllDraftFlashcardsBtn: $('saveAllDraftFlashcardsBtn'),
 }
@@ -765,6 +766,12 @@ function abandonTossup() {
   el.getExplanationBtn.disabled = true
   el.explanationContainer.textContent =
     'Click "Get Explanation" to see an AI-generated explanation of the question.'
+  // The per-clue panel is emptied as well as hidden. Left filled it would
+  // flash the previous tossup's clue explanation for as long as it takes the
+  // next one to be asked about, which is the same stale-content bug the
+  // generation counter guards against in flight.
+  el.sentenceExplanationContainer.classList.add('hidden')
+  el.sentenceExplanationContainer.textContent = ''
   el.createFlashcardBtn.disabled = true
   el.draftFlashcardsContainer.textContent =
     'Click "Create Flashcard" to draft flashcards from this tossup.'
@@ -1087,6 +1094,116 @@ function showFeedback(html, good) {
   el.answerFeedback.innerHTML = html
 }
 
+// ------------------------------------------------- per-sentence explanations --
+
+// Split on sentence endings, but NOT after an initial ("O. Henry") or a common
+// abbreviation, and only where a new sentence actually begins. Copied verbatim
+// from the desktop (renderer.js), including the reasoning, because it was
+// arrived at by measurement rather than by reading: a naive /(?<=[.?!])\s+/
+// turned "by O. Henry." into a bogus "Henry." sentence and scattered stray
+// icons through names. The lookbehind also allows a CLOSING quote after the
+// terminal punctuation -- quizbowl puts the period inside a quoted title
+// (`... wrote "The Overcoat." A later work ...`), so the character before the
+// space is a quote, not a period. Without that allowance two sentences merged
+// into one icon on 29.9% of the question bank; measured over 3,000 tossups,
+// 857 gained a boundary and none lost one.
+const SENTENCE_BOUNDARY =
+  /(?<!\b[A-Z]\.)(?<!\bMr\.)(?<!\bMrs\.)(?<!\bMs\.)(?<!\bDr\.)(?<!\bSt\.)(?<!\bJr\.)(?<!\bSr\.)(?<!\bvs\.)(?<=[.?!]["'”’]?)\s+(?=["'“‘(]?[A-Z])/g
+
+// Only the newest sentence request may paint. `api.js` has no way to pass an
+// AbortController through, so a superseded reply is dropped on arrival rather
+// than cancelled in flight -- the visible behaviour is the same one the
+// desktop gets from aborting, which is that a slow answer for a clue you have
+// moved past never renders over the one you are looking at.
+let sentenceRequest = 0
+
+/** Put a ❓ after every finished sentence in the revealed tossup.
+ *
+ *  Called only once a tossup has fully read out (see showResult), never on the
+ *  per-word tick -- the desktop does the same, and it matters: icons on text
+ *  that has not been read yet would let a player probe ahead of the reader.
+ *  Idempotent, because the container is repainted by paintWords and this can
+ *  legitimately be reached twice for one question.
+ */
+function addSentenceExplanationIcons(container) {
+  if (container.querySelector('.explanation-icon')) return
+
+  // Text sitting directly in the container, not inside a span. paintWords
+  // wraps the powermark in its own <span>, and skipping those leaves the
+  // marker alone instead of splitting a sentence around it.
+  const textNodes = []
+  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT)
+  while (walker.nextNode()) {
+    const node = walker.currentNode
+    if (node.parentElement.tagName.toLowerCase() !== 'span') textNodes.push(node)
+  }
+
+  for (const node of textNodes) {
+    const sentences = node.nodeValue.split(SENTENCE_BOUNDARY)
+    if (!sentences.some((sentence) => sentence.trim().length)) continue
+
+    const fragment = document.createDocumentFragment()
+    for (const sentence of sentences) {
+      if (!sentence.trim().length) continue
+      const span = document.createElement('span')
+      span.textContent = sentence
+      fragment.append(span)
+
+      // The same closing-quote allowance as SENTENCE_BOUNDARY above. If the
+      // two disagree, the splitter produces a segment ending `..."` that this
+      // gate then refuses to mark, leaving a clue on screen with no way to
+      // ask about it.
+      if (/[.?!]["'”’]?$/.test(sentence.trim())) {
+        const icon = document.createElement('span')
+        icon.className = 'explanation-icon text-blue-400'
+        icon.textContent = ' ❓'
+        icon.title = 'Explain this clue'
+        icon.addEventListener('click', (event) => {
+          event.stopPropagation()
+          explainSentence(sentence.trim(), icon)
+        })
+        fragment.append(icon)
+      }
+      fragment.append(document.createTextNode(' '))   // whitespace the split ate
+    }
+    node.parentNode.replaceChild(fragment, node)
+  }
+}
+
+async function explainSentence(sentence, icon) {
+  if (!question) return
+  const label = icon.textContent
+  const askedFor = questionGeneration
+  const ticket = ++sentenceRequest
+  icon.textContent = ' …'
+
+  el.sentenceExplanationContainer.classList.remove('hidden')
+  el.sentenceExplanationContainer.textContent = 'Asking the AI…'
+
+  try {
+    const { explanation } = await api.explainSentence(question.id, sentence)
+    if (ticket !== sentenceRequest || askedFor !== questionGeneration) return
+    el.sentenceExplanationContainer.innerHTML =
+      `<strong>Explanation:</strong> ${escapeHtml(explanation || 'The AI returned nothing for that clue.')}`
+  } catch (error) {
+    if (ticket !== sentenceRequest || askedFor !== questionGeneration) return
+    if (error instanceof ApiError && error.payload?.code === 'no_key') {
+      // A setup step, not a failure -- routed to Settings with the field in
+      // view, the same as the two whole-tossup AI features.
+      el.sentenceExplanationContainer.textContent = error.message
+      openSettings()
+      $('aiKeyInput')?.focus()
+    } else {
+      el.sentenceExplanationContainer.textContent = error.message
+    }
+  } finally {
+    // Restored even on a superseded request: the icon belongs to the tossup on
+    // screen, and leaving it as an ellipsis would make a clue look permanently
+    // mid-request.
+    icon.textContent = label
+  }
+}
+
 function showResult(result) {
   const verdict = { power: 'Power!', ten: 'Correct', neg: 'Neg', pass: 'No buzz' }[result.outcome]
   const sign = result.points > 0 ? '+' : ''
@@ -1099,6 +1216,8 @@ function showResult(result) {
   // The whole tossup, with the power still marked -- this is the moment the
   // marking is most worth having, and the desktop used to lose it right here.
   paintWords(words.length)
+  // ...and only now, with the question over, does each sentence get its ❓.
+  addSentenceExplanationIcons(el.questionContainer)
 
   // The label follows the outcome. "Add to missed" on a question you just got
   // right reads as the wrong control, and the endpoint is the same either way.

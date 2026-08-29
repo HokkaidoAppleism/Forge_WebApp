@@ -23,10 +23,10 @@
         <form id="authForm" class="mt-5 flex flex-col gap-3">
           <input id="email" type="email" placeholder="you@example.com" required
                  autocomplete="email"
-                 class="rounded-lg border border-[#584741] bg-[#1d1816] p-3 focus:border-[#efe0db] focus:outline-none" />
+                 class="rounded-lg border border-[#584741] bg-[#1d1816] p-3 focus:border-[#efe0db] focus:outline-none" aria-label="Email address" />
           <input id="password" type="password" placeholder="Password" required
                  minlength="8" autocomplete="current-password"
-                 class="rounded-lg border border-[#584741] bg-[#1d1816] p-3 focus:border-[#efe0db] focus:outline-none" />
+                 class="rounded-lg border border-[#584741] bg-[#1d1816] p-3 focus:border-[#efe0db] focus:outline-none" aria-label="Password" />
           <div class="flex gap-2">
             <button type="submit" data-mode="signin"
                     class="flex-1 rounded-full bg-[#efe0db] px-4 py-2 font-bold text-[#1d1816]">Sign in</button>
@@ -51,22 +51,22 @@
         <h1 class="text-3xl font-bold tracking-tight">Forge QB</h1>
         <div class="flex items-center gap-2">
           <span id="whoami" class="mr-2 hidden text-sm text-text-muted sm:inline"></span>
-          <button id="notebookBtn" class="flex h-10 w-10 items-center justify-center rounded-full bg-[#3e322e] hover:bg-[#584741]" title="View Notebook">
+          <button id="notebookBtn" class="flex h-10 w-10 items-center justify-center rounded-full bg-[#3e322e] hover:bg-[#584741]" title="View Notebook" aria-label="View Notebook">
             <svg xmlns="http://www.w3.org/2000/svg" class="size-5" viewBox="0 0 24 24" fill="currentColor"><path d="M4 6h16v2H4zm0 5h16v2H4zm0 5h16v2H4z"></path></svg>
           </button>
-          <button id="recordsBtn" class="flex h-10 w-10 items-center justify-center rounded-full bg-[#3e322e] hover:bg-[#584741]" title="Adaptive Learning Records">
+          <button id="recordsBtn" class="flex h-10 w-10 items-center justify-center rounded-full bg-[#3e322e] hover:bg-[#584741]" title="Adaptive Learning Records" aria-label="Adaptive Learning Records">
             <svg xmlns="http://www.w3.org/2000/svg" class="size-5" viewBox="0 0 24 24" fill="currentColor"><path d="M5 3h12a2 2 0 0 1 2 2v16l-4-2-4 2-4-2-4 2V5a2 2 0 0 1 2-2zm2 4v2h8V7H7zm0 4v2h8v-2H7z"/></svg>
           </button>
-          <button id="reviewSettingsBtn" class="flex h-10 w-10 items-center justify-center rounded-full bg-[#3e322e] hover:bg-[#584741]" title="Review Missed settings">
+          <button id="reviewSettingsBtn" class="flex h-10 w-10 items-center justify-center rounded-full bg-[#3e322e] hover:bg-[#584741]" title="Review Missed settings" aria-label="Review Missed settings">
             <svg xmlns="http://www.w3.org/2000/svg" class="size-5" viewBox="0 0 24 24" fill="currentColor"><path d="M12 5V1L7 6l5 5V7a6 6 0 1 1-6 6H4a8 8 0 1 0 8-8z"/></svg>
           </button>
-          <button id="profileBtn" class="flex h-10 w-10 items-center justify-center rounded-full bg-[#3e322e] hover:bg-[#584741]" title="View Profile">
+          <button id="profileBtn" class="flex h-10 w-10 items-center justify-center rounded-full bg-[#3e322e] hover:bg-[#584741]" title="View Profile" aria-label="View Profile">
             <svg xmlns="http://www.w3.org/2000/svg" class="size-5" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 4c1.93 0 3.5 1.57 3.5 3.5S13.93 13 12 13s-3.5-1.57-3.5-3.5S10.07 6 12 6zm0 14c-2.03 0-4.43-.82-6.14-2.88a9.947 9.947 0 0 1 12.28 0C16.43 19.18 14.03 20 12 20z"/></svg>
           </button>
-          <button id="aboutBtn" class="flex h-10 w-10 items-center justify-center rounded-full bg-[#3e322e] hover:bg-[#584741]" title="About, terms and privacy">
+          <button id="aboutBtn" class="flex h-10 w-10 items-center justify-center rounded-full bg-[#3e322e] hover:bg-[#584741]" title="About, terms and privacy" aria-label="About, terms and privacy">
             <svg xmlns="http://www.w3.org/2000/svg" class="size-5" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg>
           </button>
-          <button id="settingsBtn" class="flex h-10 w-10 items-center justify-center rounded-full bg-[#3e322e] hover:bg-[#584741]" title="Settings">
+          <button id="settingsBtn" class="flex h-10 w-10 items-center justify-center rounded-full bg-[#3e322e] hover:bg-[#584741]" title="Settings" aria-label="Settings">
             <svg xmlns="http://www.w3.org/2000/svg" class="size-5" viewBox="0 0 24 24" fill="currentColor"><path d="M19.43 12.98c.04-.32.07-.64.07-.98s-.03-.66-.07-.98l2.11-1.65c.19-.15.24-.42.12-.64l-2-3.46c-.12-.22-.39-.3-.61-.22l-2.49 1c-.52-.4-1.08-.73-1.69-.98l-.38-2.65C14.46 2.18 14.25 2 14 2h-4c-.25 0-.46.18-.49.42l-.38 2.65c-.61.25-1.17.59-1.69.98l-2.49-1c-.23-.09-.49 0-.61.22l-2 3.46c-.13.22-.07.49.12.64l2.11 1.65c-.04.32-.07.65-.07.98s.03.66.07.98l-2.11 1.65c-.19.15-.24.42-.12.64l2 3.46c.12.22.39.3.61.22l2.49-1c.52.4 1.08.73 1.69.98l.38 2.65c.03.24.24.42.49.42h4c.25 0 .46-.18.49-.42l.38-2.65c.61-.25 1.17-.59 1.69-.98l2.49 1c.23.09.49 0 .61-.22l2-3.46c.12-.22.07-.49-.12-.64l-2.11-1.65zM12 15.5c-1.93 0-3.5-1.57-3.5-3.5s1.57-3.5 3.5-3.5 3.5 1.57 3.5 3.5-1.57 3.5-3.5 3.5z"/></svg>
           </button>
         </div>
@@ -230,6 +230,14 @@
                  about the schedule rather than quietly ignoring it. -->
             <p id="reviewAheadNotice" class="mb-2 hidden text-xs text-[#f6b17a]"></p>
             <p id="questionContainer" class="min-h-[3rem] leading-relaxed">Click “Start Reader” to start practicing</p>
+            <!-- One clue's explanation, from the ❓ markers added to the
+                 question once it has fully read out. Separate from the AI
+                 Explanation panel further down, which explains the whole
+                 tossup: this answers "what was that one sentence about"
+                 without replacing the longer breakdown you may already have
+                 open. -->
+            <div id="sentenceExplanationContainer"
+                 class="mt-3 hidden rounded-lg bg-secondary-dark p-3 text-sm"></div>
           </section>
 
           <!-- Answer Box -->
@@ -238,7 +246,7 @@
             <div class="flex items-center gap-3">
               <!-- Starts disabled: the box only unlocks once you've buzzed. -->
               <input id="answerInput" placeholder="Buzz to answer" disabled
-                     class="flex-1 rounded-lg border border-[#584741] bg-[#1d1816] p-3 focus:border-[#efe0db] focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"/>
+                     class="flex-1 rounded-lg border border-[#584741] bg-[#1d1816] p-3 focus:border-[#efe0db] focus:outline-none disabled:cursor-not-allowed disabled:opacity-50" aria-label="Your answer" />
               <span id="buzzTimer" class="hidden min-w-[5.5rem] text-center font-mono text-lg font-bold tabular-nums" title="Time remaining"></span>
               <button id="submitAnswerBtn" data-state="buzz" class="rounded-full bg-emerald-600 px-4 py-2 font-bold disabled:opacity-40" title="Keyboard shortcut: Enter or Space">Buzz</button>
             </div>
@@ -356,7 +364,7 @@
         <div class="mb-6">
           <input id="notebookSearch" type="search" autocomplete="off"
             placeholder="Search guides, notes, clues and flashcards…"
-            class="w-full rounded-lg border border-[#584741] bg-[#1d1816] p-2 text-white placeholder:text-text-muted focus:border-[#efe0db] focus:outline-none">
+            class="w-full rounded-lg border border-[#584741] bg-[#1d1816] p-2 text-white placeholder:text-text-muted focus:border-[#efe0db] focus:outline-none" aria-label="Search your notebook">
           <p id="notebookSearchCount" class="mt-1 hidden text-xs text-text-muted"></p>
         </div>
 
@@ -700,9 +708,9 @@
 
           <div class="mb-4 flex flex-wrap items-center gap-3">
             <input id="browseSearch" type="search" placeholder="Search answers…"
-              class="min-w-[200px] flex-1 rounded-lg border border-[#584741] bg-[#1d1816] p-2 text-white placeholder:text-text-muted focus:border-[#efe0db] focus:outline-none">
+              class="min-w-[200px] flex-1 rounded-lg border border-[#584741] bg-[#1d1816] p-2 text-white placeholder:text-text-muted focus:border-[#efe0db] focus:outline-none" aria-label="Search answers">
             <select id="browseStatus"
-              class="rounded-lg border border-[#584741] bg-[#1d1816] p-2 text-white focus:border-[#efe0db] focus:outline-none">
+              class="rounded-lg border border-[#584741] bg-[#1d1816] p-2 text-white focus:border-[#efe0db] focus:outline-none" aria-label="Filter by review status">
               <option value="queued" selected>In review</option>
               <option value="stuck">Stuck</option>
               <option value="learned">Relearned</option>
@@ -710,7 +718,7 @@
               <option value="all">Any status</option>
             </select>
             <select id="browseCategoryFilter"
-              class="rounded-lg border border-[#584741] bg-[#1d1816] p-2 text-white focus:border-[#efe0db] focus:outline-none">
+              class="rounded-lg border border-[#584741] bg-[#1d1816] p-2 text-white focus:border-[#efe0db] focus:outline-none" aria-label="Filter by category">
               <option value="all">All categories</option>
             </select>
           </div>
@@ -874,7 +882,7 @@
           <div class="mt-2 flex items-center gap-2">
             <input id="aiKeyInput" type="password" placeholder="Paste your Gemini API key"
                    autocomplete="off"
-                   class="flex-1 rounded-lg border border-[#584741] bg-[#1d1816] p-2 text-sm focus:border-[#efe0db] focus:outline-none">
+                   class="flex-1 rounded-lg border border-[#584741] bg-[#1d1816] p-2 text-sm focus:border-[#efe0db] focus:outline-none" aria-label="Gemini API key">
             <button id="saveAiKeyBtn" class="shrink-0 rounded-full bg-sky-600 px-3 py-2 text-sm font-bold hover:bg-sky-700 disabled:opacity-50">Save</button>
           </div>
           <button id="removeAiKeyBtn" class="mt-2 hidden text-xs text-red-400 underline hover:text-red-300">Remove saved key</button>
@@ -944,7 +952,7 @@
              are changing is visibly the thing you were just reading. -->
         <div id="modalNoteContent" class="guide flex-grow overflow-y-auto"></div>
         <textarea id="modalNoteEditor"
-          class="hidden flex-grow resize-none overflow-y-auto rounded-lg border border-[#584741] bg-[#1d1816] p-3 font-mono text-sm focus:border-[#efe0db] focus:outline-none"></textarea>
+          class="hidden flex-grow resize-none overflow-y-auto rounded-lg border border-[#584741] bg-[#1d1816] p-3 font-mono text-sm focus:border-[#efe0db] focus:outline-none" aria-label="Note text"></textarea>
 
         <button id="closeNoteViewerBtn" class="absolute right-4 top-4 rounded-full bg-gray-600 px-3 py-1 font-bold hover:bg-gray-700">Close</button>
         <div class="mt-4 flex items-center justify-end gap-2 border-t border-gray-600 pt-4">
@@ -968,14 +976,14 @@
         <div id="guideTargetWrap" class="mt-4 hidden">
           <label class="block text-xs font-bold uppercase tracking-wide text-text-muted">Add to</label>
           <select id="guideTargetSelect"
-                  class="mt-1 w-full rounded bg-tertiary-dark px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-sky-500">
+                  class="mt-1 w-full rounded bg-tertiary-dark px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-sky-500" aria-label="Add to which guide">
             <option value="__new__">➕ A new guide…</option>
           </select>
         </div>
 
         <input id="guideNameInput" type="text" maxlength="120" autocomplete="off"
                placeholder="e.g. Famous Battles and Rivers"
-               class="mt-4 w-full rounded bg-tertiary-dark px-3 py-2 text-white placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-sky-500">
+               class="mt-4 w-full rounded bg-tertiary-dark px-3 py-2 text-white placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-sky-500" aria-label="Guide name">
         <p id="guideNameError" class="mt-2 hidden text-sm text-red-400"></p>
         <div class="mt-5 flex justify-end gap-2">
           <button id="guideNameCancelBtn" class="rounded bg-gray-600 px-4 py-2 font-bold hover:bg-gray-700">Cancel</button>
