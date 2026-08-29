@@ -437,6 +437,27 @@ export function initNotebook({ onBack, onNeedAiKey }) {
 
   // ---------------------------------------------------------- note viewer --
 
+  /** Report a failed row action on the button itself, then give it back.
+   *
+   *  These two used to set the label to '!' and leave the button disabled, so
+   *  a delete that failed for any reason -- a dropped connection is enough --
+   *  left a dead control with a one-character message and no way to try again
+   *  short of reloading the page. The row is still there and still deletable;
+   *  the only thing that had actually failed was one request. Same shape as
+   *  the copy button above: say so, hand the control back, put the label
+   *  right again a moment later. The real message goes on `title` because
+   *  these buttons are single-glyph and have nowhere to print a sentence.
+   */
+  function failedRowAction(button, error, label) {
+    button.disabled = false
+    button.textContent = '!'
+    button.title = error.message
+    setTimeout(() => {
+      button.textContent = label
+      button.title = ''
+    }, 3000)
+  }
+
   el.detailScreen.addEventListener('click', async (event) => {
     const openBtn = event.target.closest('[data-open-note]')
     if (openBtn) return showNote(Number(openBtn.dataset.openNote))
@@ -444,19 +465,21 @@ export function initNotebook({ onBack, onNeedAiKey }) {
     const clueBtn = event.target.closest('[data-delete-clue]')
     if (clueBtn) {
       const id = Number(clueBtn.dataset.deleteClue)
+      const label = clueBtn.textContent
       clueBtn.disabled = true
       try {
         await api.deleteClue(id)
         clues = clues.filter((c) => c.id !== id)
         paintClues()
         applySearch()
-      } catch (error) { clueBtn.textContent = '!' }
+      } catch (error) { failedRowAction(clueBtn, error, label) }
       return
     }
 
     const cardBtn = event.target.closest('[data-delete-card]')
     if (cardBtn) {
       const id = Number(cardBtn.dataset.deleteCard)
+      const label = cardBtn.textContent
       cardBtn.disabled = true
       try {
         await api.deleteFlashcard(id)
@@ -466,7 +489,7 @@ export function initNotebook({ onBack, onNeedAiKey }) {
         pickedCards.delete(id)
         paintCards()
         applySearch()
-      } catch (error) { cardBtn.textContent = '!' }
+      } catch (error) { failedRowAction(cardBtn, error, label) }
     }
   })
 

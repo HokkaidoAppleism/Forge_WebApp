@@ -96,6 +96,23 @@ export function initReviewSettings({ onStartReviewing, onOpenReviewList }) {
     el.toReview.textContent = counts.toReview
     el.learned.textContent = counts.learned
     el.stuck.textContent = counts.stuck
+
+    // Nothing queued means "Start Reviewing" can only fail, so it says why
+    // instead of offering a click that dead-ends. The thresholds above it are
+    // still worth setting ahead of time, which is why the panel stays open
+    // and only this one control changes -- see the review list's own empty
+    // state for the longer version of the same message.
+    const empty = (counts.toReview + counts.learned) === 0
+    el.startBtn.disabled = empty
+    el.startBtn.classList.toggle('opacity-50', empty)
+    el.startBtn.classList.toggle('cursor-not-allowed', empty)
+    el.startBtn.title = empty
+      ? 'Add a question with “Add to Missed” first'
+      : ''
+    if (empty && !el.message.textContent) {
+      el.message.textContent =
+        'Nothing to review yet — press “Add to Missed” after a tossup to add one.'
+    }
   }
 
   return async function openReviewSettings() {

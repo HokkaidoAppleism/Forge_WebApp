@@ -45,12 +45,38 @@ export function initReviewList({ onBack, onStartReviewing }) {
       // inside it), so the total is toReview + learned -- summing every tile
       // would double-count a stuck, overdue question three times over.
       const total = counts.toReview + counts.learned
-      el.summary.innerHTML =
-        statTile('Due now', counts.due) +
-        statTile("Haven't Reviewed", counts.toReview) +
-        statTile('Relearned', counts.learned) +
-        statTile('Stuck', counts.stuck) +
-        statTile('Total', total)
+
+      // An empty queue is the normal state for a new account -- and, since
+      // negging a tossup stopped filing it here automatically, the normal
+      // state for anyone who has not deliberately added one yet. Five tiles
+      // reading zero above a button that can only fail says nothing about
+      // how to change that, so say it instead of showing the scoreboard of
+      // an empty list.
+      if (total === 0) {
+        el.summary.innerHTML = `
+          <div class="col-span-full rounded-lg bg-secondary-dark p-6 text-center">
+            <p class="font-bold">Nothing in your review list yet.</p>
+            <p class="mt-2 text-sm text-text-muted">
+              While you are reading a tossup, press
+              <span class="font-bold text-amber-500">Add to Missed</span> once the
+              question closes out to put it here. Anything you add comes back on a
+              spaced-repetition schedule until you have relearned it.
+            </p>
+          </div>`
+        el.startBtn.disabled = true
+        el.startBtn.classList.add('opacity-50', 'cursor-not-allowed')
+        el.startBtn.title = 'Add a question to your review list first'
+      } else {
+        el.startBtn.disabled = false
+        el.startBtn.classList.remove('opacity-50', 'cursor-not-allowed')
+        el.startBtn.title = ''
+        el.summary.innerHTML =
+          statTile('Due now', counts.due) +
+          statTile("Haven't Reviewed", counts.toReview) +
+          statTile('Relearned', counts.learned) +
+          statTile('Stuck', counts.stuck) +
+          statTile('Total', total)
+      }
 
       const chosen = el.categoryFilter.value
       el.categoryFilter.innerHTML = '<option value="all">All categories</option>' +

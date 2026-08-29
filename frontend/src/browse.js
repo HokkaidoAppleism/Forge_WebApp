@@ -297,8 +297,8 @@ export function initBrowse() {
       remove.className = 'mt-3 rounded-full bg-red-700 px-3 py-1 text-xs font-bold text-white hover:bg-red-800'
       remove.addEventListener('click', async () => {
         if (!confirm(`Remove “${item.answer}” from your review list? ` +
-                     'This also clears its answer history here. It comes back ' +
-                     'automatically the next time you neg it.')) return
+                     'This also clears its answer history here. Negging it again ' +
+                     'will not put it back — use Add to Missed for that.')) return
         remove.disabled = true
         try {
           await api.removeFromReview(item.id)

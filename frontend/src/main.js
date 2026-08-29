@@ -127,6 +127,13 @@ let voiceEstimating = false
 let submitting = false  // guards double-submit; see finish()
 let reviewMode = false
 let filters = []        // the category tree from /api/questions/filters
+// Bumped every time the tossup in the reader changes. An AI request captures
+// it before going out and drops its own answer if it comes back to a different
+// question -- the desktop has had this as `questionGeneration` since the same
+// bug bit it there. Without it, asking for an explanation and pressing Next
+// before it lands paints the old question's explanation beside the new one,
+// with nothing on screen to say it is the wrong one.
+let questionGeneration = 0
 
 // Both localStorage keys live up here with the state they guard, not beside
 // the functions that read them. `onAuthStateChange` fires during module
@@ -138,6 +145,33 @@ const PREFS = 'forgeqb.prefs'
 // Last known category tree, so the reader's boxes can be filled in on the
 // first paint instead of after a round trip. See `loadFilters`.
 const FILTERS_CACHE = 'forgeqb.filters.v1' 
+// Up here for the same temporal-dead-zone reason, and this one was already a
+// live latent bug rather than a precaution: the auth handler's signed-out
+// branch calls openReader() -> showScreen(), which reads SCREENS, and SCREENS
+// used to be declared 28 lines *below* that handler. Every signed-out page
+// load therefore threw "Cannot access 'SCREENS' before initialization" and
+// abandoned the rest of the handler. It went unnoticed only because
+// readerScreen starts visible in index.html, so the screen it failed to show
+// was already on screen -- the third instance of this exact mistake in this
+// file, after signedInEmail and countdownInterval.
+const SCREENS = [
+  'readerScreen', 'profileScreen', 'aboutScreen', 'adaptiveSetupScreen',
+  'notebookHubScreen', 'notebookDetailScreen', 'recordsScreen', 'reviewListScreen',
+]
+
+// "Your Stats" is this sitting, not the account's lifetime total -- matching
+// the desktop, whose own `stats` object (renderer.js) is the same kind of
+// in-memory counter. It resets on sign-in/app load, and wherever
+// `resetSessionStats()` is called: starting Adaptive Learning or starting
+// Review Missed. True lifetime totals still exist -- the profile screen reads
+// `api.stats()` directly -- this box just isn't them.
+//
+// Up here rather than beside paintSessionStats for the same reason as SCREENS
+// above, and it was the same live bug: the auth handler calls
+// resetSessionStats() directly on sign-in, which *assigns* to this, and
+// assigning to a `let` still inside its temporal dead zone throws exactly as
+// reading one does. The box therefore did not actually zero on sign-in.
+let sessionStats = { heard: 0, powers: 0, tens: 0, negs: 0, points: 0, celeritySum: 0, correctCount: 0 }
 
 // Adaptive Learning. `adaptive` is null outside a session and otherwise holds
 // the picks, their weights and the running session totals. The skill model
@@ -211,10 +245,20 @@ supabase.auth.onAuthStateChange((_event, session) => {
 // to, not while there are two.
 const showProfile = initProfile(el)
 
-const SCREENS = [
-  'readerScreen', 'profileScreen', 'aboutScreen', 'adaptiveSetupScreen',
-  'notebookHubScreen', 'notebookDetailScreen', 'recordsScreen', 'reviewListScreen',
-]
+/** What the empty reader should tell you to press next.
+ *
+ *  "Click Start Reader" is right only when nothing else is going on. Start
+ *  Reader *leaves* both Adaptive Learning and review mode (see its handler),
+ *  so telling someone 15 questions into an adaptive session to press it was
+ *  pointing them at the one button that silently ends the session they are
+ *  still in -- the stats box beside it stays on screen the whole time, so
+ *  nothing contradicted the instruction until the session was already gone.
+ */
+function idlePrompt() {
+  if (adaptive) return 'Click “Next Question” to continue your Adaptive Learning session'
+  if (reviewMode) return 'Click “Review Next” to continue reviewing'
+  return 'Click “Start Reader” to start practicing'
+}
 
 /** Show exactly one screen. Leaving a tossup half-read to look at something
  *  else must not leave a timer running behind the page, or score a pass while
@@ -225,7 +269,7 @@ function showScreen(name) {
     && !el.readerScreen.classList.contains('hidden')
   if (leavingReader) {
     abandonTossup()
-    el.questionContainer.textContent = 'Click “Start Reader” to start practicing'
+    el.questionContainer.textContent = idlePrompt()
   }
   // Settings is a modal, not one of these screens, so it never closed on its
   // own when a nav button switched screens underneath it -- most visibly
@@ -516,8 +560,8 @@ el.voiceModeToggle.addEventListener('change', () => {
     // is sitting empty; leave a fully-read or already-buzzed tossup alone.
     if (!words.length) {
       el.questionContainer.textContent = voiceMode
-        ? 'Voice Mode on — press "Start Reader" to hear a tossup.'
-        : 'Click "Start Reader" to start practicing'
+        ? 'Voice Mode on — press “Next Question” to hear a tossup.'
+        : idlePrompt()
     }
     return
   }
@@ -701,6 +745,7 @@ function abandonTossup() {
   wordIndex = 0
   powerIdx = -1
   question = null
+  questionGeneration++
   answerAttemptId = crypto.randomUUID()
   buzzed = false
   paused = false
@@ -895,7 +940,37 @@ el.answerInput.addEventListener('keydown', (event) => {
   if (event.key === 'Enter') finish({ didBuzz: true, guess: el.answerInput.value })
 })
 
+// The three modals that float *over* the reader rather than replacing it.
+// (The notebook's own two live on the notebook screen, which hides the reader
+// outright, so the screen test below already covers them.)
+const READER_MODALS = ['settingsModal', 'reviewSettingsModal', 'resetStatsModal']
+
+/** Is anything covering the reader right now? */
+function modalOpen() {
+  return READER_MODALS.some((id) => !$(id).classList.contains('hidden'))
+}
+
+/** Close whatever is covering the reader. Returns true if it closed something. */
+function closeTopModal() {
+  let closed = false
+  for (const id of READER_MODALS) {
+    const modal = $(id)
+    if (modal.classList.contains('hidden')) continue
+    modal.classList.add('hidden')
+    modal.classList.remove('flex')
+    closed = true
+  }
+  return closed
+}
+
 document.addEventListener('keydown', (event) => {
+  // Escape closes whatever is on top. The notebook already did this for its
+  // own two modals; these three had no key at all, so Escape worked on two
+  // dialogs out of five and the difference looked arbitrary from the outside.
+  // Handled before the `typing` test on purpose -- Escape is exactly the key
+  // you reach for *while* your cursor is in one of these fields.
+  if (event.key === 'Escape' && closeTopModal()) return
+
   // A range slider is an <input> you cannot type into, so testing the tag name
   // alone would kill every shortcut after touching one. Only real text entry
   // swallows keys.
@@ -913,6 +988,11 @@ document.addEventListener('keydown', (event) => {
   // The reader's shortcuts belong to the reader. Pressing S on the profile
   // page would start a tossup on a screen that cannot show it.
   if (el.readerScreen.classList.contains('hidden')) return
+  // ...and they do not belong to a dialog sitting on top of it. These modals
+  // cover the reader without hiding it, so with Settings open, N advanced the
+  // tossup underneath and Space buzzed on a question nobody could see -- both
+  // scored, both invisible until the dialog was dismissed.
+  if (modalOpen()) return
 
   const key = event.key.toLowerCase()
   if ((event.code === 'Space' || key === 'b') && !buzzed && words.length) {
@@ -1028,12 +1108,22 @@ function showResult(result) {
 
 el.addToMissedBtn.addEventListener('click', async () => {
   if (!question) return
+  const label = el.addToMissedBtn.textContent
   el.addToMissedBtn.disabled = true
   try {
     await api.addToReview(question.id)
     el.addToMissedBtn.textContent = 'Added'
+    toast('Added to your review list')
   } catch (error) {
-    el.addToMissedBtn.textContent = error.message
+    // The button is handed back rather than left disabled holding the error
+    // as its own label. That mattered a little when a neg filed the question
+    // automatically and this was a shortcut; it matters properly now that
+    // this is the *only* way into the review list, because a click that
+    // failed once and cannot be retried is a question quietly lost. The
+    // message goes to the toast -- it is a sentence, and this is a button.
+    el.addToMissedBtn.disabled = false
+    el.addToMissedBtn.textContent = label
+    toast(error.message)
   }
 })
 
@@ -1041,14 +1131,20 @@ el.addToMissedBtn.addEventListener('click', async () => {
 
 el.getExplanationBtn.addEventListener('click', async () => {
   if (!question) return
+  const asked = questionGeneration
   el.getExplanationBtn.disabled = true
   el.explanationContainer.textContent = 'Asking the AI…'
   try {
     // The question and answer are read off the id on the server -- see
     // routes/ai.py -- so only the id and whatever was typed as a guess go up.
     const { explanation } = await api.explainQuestion(question.id, el.answerInput.value)
+    // Gemini takes seconds; Next Question takes one click. If the tossup moved
+    // on while this was in flight, the answer belongs to a question that is no
+    // longer on screen -- drop it rather than painting it under the new one.
+    if (asked !== questionGeneration) return
     el.explanationContainer.innerHTML = renderMarkdown(explanation)
   } catch (error) {
+    if (asked !== questionGeneration) return
     if (error instanceof ApiError && error.payload?.code === 'no_key') {
       // Not a failure -- a setup step. Routed to Settings rather than to the
       // generic error text, with the field it needs already in view.
@@ -1065,7 +1161,7 @@ el.getExplanationBtn.addEventListener('click', async () => {
 
 // ---------------------------------------------------------------- flashcards --
 
-function paintDraftCards(cards, category) {
+function paintDraftCards(cards, category, sourceQuestionId) {
   if (!cards.length) {
     el.draftFlashcardsContainer.textContent = 'No usable cards came back. Try again.'
     el.saveAllDraftFlashcardsBtn.classList.add('hidden')
@@ -1105,7 +1201,7 @@ function paintDraftCards(cards, category) {
       btn.textContent = 'Saving…'
       try {
         await api.saveFlashcards({
-          category, sourceQuestionId: question?.id,
+          category, sourceQuestionId,
           flashcards: [{ term: card.term, definition: card.definition }],
         })
         btn.textContent = 'Saved'
@@ -1136,7 +1232,7 @@ function paintDraftCards(cards, category) {
     el.saveAllDraftFlashcardsBtn.textContent = 'Saving…'
     try {
       await api.saveFlashcards({
-        category, sourceQuestionId: question?.id,
+        category, sourceQuestionId,
         flashcards: pending.map(({ card }) => ({ term: card.term, definition: card.definition })),
       })
       pending.forEach(({ i }) => {
@@ -1161,12 +1257,21 @@ function paintDraftCards(cards, category) {
 
 el.createFlashcardBtn.addEventListener('click', async () => {
   if (!question) return
+  const asked = questionGeneration
+  // Pinned here, not read again when Save is pressed. These cards are about
+  // *this* tossup however long the player leaves them on screen, and reading
+  // `question` at save time filed them under whatever happened to be loaded
+  // by then -- a card about one question, recorded as having come from
+  // another, which the notebook then groups and labels by.
+  const source = { id: question.id, category: question.category }
   el.createFlashcardBtn.disabled = true
   el.draftFlashcardsContainer.textContent = 'Asking the AI…'
   try {
     const { cards } = await api.generateFlashcards(question.id)
-    paintDraftCards(cards, question.category)
+    if (asked !== questionGeneration) return    // see getExplanationBtn above
+    paintDraftCards(cards, source.category, source.id)
   } catch (error) {
+    if (asked !== questionGeneration) return
     if (error instanceof ApiError && error.payload?.code === 'no_key') {
       el.draftFlashcardsContainer.innerHTML = `<p>${escapeHtml(error.message)}</p>`
       openSettings()
@@ -1180,14 +1285,6 @@ el.createFlashcardBtn.addEventListener('click', async () => {
 })
 
 // ------------------------------------------------------------------- stats --
-
-// "Your Stats" is this sitting, not the account's lifetime total -- matching
-// the desktop, whose own `stats` object (renderer.js) is the same kind of
-// in-memory counter. It resets on sign-in/app load (the initial value below),
-// and wherever `resetSessionStats()` is called: starting Adaptive Learning or
-// starting Review Missed. True lifetime totals still exist -- the profile
-// screen reads `api.stats()` directly -- this box just isn't them.
-let sessionStats = { heard: 0, powers: 0, tens: 0, negs: 0, points: 0, celeritySum: 0, correctCount: 0 }
 
 function paintSessionStats() {
   const avgCelerity = sessionStats.correctCount
@@ -1260,7 +1357,13 @@ el.saveHighlightBtn.addEventListener('click', async () => {
     el.saveHighlightBtn.textContent = 'Saved'
     toast('Clue saved to your notebook')
   } catch (error) {
-    el.saveHighlightBtn.textContent = error.message
+    // Same as Add to Missed above: give the control back and put the message
+    // where a sentence fits. `selectionchange` would eventually reset this,
+    // but only once the player selects something else -- retrying the
+    // highlight they are actually looking at should not require that.
+    el.saveHighlightBtn.disabled = false
+    el.saveHighlightBtn.textContent = 'Save Highlight'
+    toast(error.message)
   }
 })
 
