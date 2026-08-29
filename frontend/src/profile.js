@@ -1216,7 +1216,47 @@ const PANELS = [
 
 // ------------------------------------------------------------------ wiring --
 
+/** Panel data, remembered for as long as the scope it was fetched under holds.
+ *
+ *  Every panel is its own request, and switching panels re-fired it every time
+ *  -- clicking Buzz Points, then Ceiling, then back to Buzz Points cost three
+ *  round trips for two distinct answers, each one a full Railway -> Supabase
+ *  hop. None of it can have changed in between: nothing on the Profile screen
+ *  writes an answer.
+ *
+ *  It also closes a duplicate that was invisible from the code: the Outcome
+ *  Split panel loads `api.stats(...)` and so does the stat-tile row above it,
+ *  so opening the Profile fetched `/api/stats/summary` twice every time. Both
+ *  now share one in-flight promise.
+ *
+ *  Keyed by scope, and the *promise* is stored rather than the resolved value,
+ *  so two callers racing for the same data make one request rather than two.
+ *  `clear()` runs whenever the category filter, the session or the month
+ *  changes -- anything that makes the stored answers describe a different
+ *  question -- and whenever the screen is reopened, so a sitting played since
+ *  last time is never served from memory.
+ */
+function makePanelCache() {
+  let store = new Map()
+  return {
+    get(key, fetcher) {
+      if (!store.has(key)) {
+        // A failed request must not be cached as a permanent failure: drop it
+        // so the next attempt is a real retry rather than the same rejection.
+        const promise = fetcher().catch((error) => {
+          store.delete(key)
+          throw error
+        })
+        store.set(key, promise)
+      }
+      return store.get(key)
+    },
+    clear() { store = new Map() },
+  }
+}
+
 export function initProfile(el) {
+  const cache = makePanelCache()
   let current = PANELS[0].key
   let month = null
   // The saved Adaptive Learning sitting this page is scoped to, or null for
@@ -1263,8 +1303,9 @@ export function initProfile(el) {
     el.statSubPicker.innerHTML = ''
     try {
       if (panel.views) {
-        const datasets = await Promise.all(
-          panel.views.map((v) => v.load(category, session?.sessionId)))
+        const datasets = await Promise.all(panel.views.map((v) =>
+          cache.get(`${panel.key}|${v.key}|${category}|${session?.sessionId ?? ''}`,
+                    () => v.load(category, session?.sessionId))))
         if (!activeViewKey || !panel.views.some((v) => v.key === activeViewKey)) {
           activeViewKey = panel.views[0].key
         }
@@ -1281,7 +1322,9 @@ export function initProfile(el) {
         render()
         el.statAboutFinding.textContent = panel.finding(datasets[0])
       } else {
-        const data = await panel.load(category, session?.sessionId)
+        const data = await cache.get(
+          `${panel.key}||${category}|${session?.sessionId ?? ''}`,
+          () => panel.load(category, session?.sessionId))
         el.statView.textContent = ''
         el.statView.append(panel.draw(data))
         el.statAboutFinding.textContent = panel.finding(data)
@@ -1359,7 +1402,10 @@ export function initProfile(el) {
 
   async function loadLifetime() {
     const category = session ? '' : el.profileCategoryFilter.value
-    const { lifetime } = await api.stats(category, session?.sessionId)
+    // Same key the Outcome Split panel uses, so the two share one request.
+    const lifetime = await cache.get(
+      `outcomeSplit||${category}|${session?.sessionId ?? ''}`,
+      async () => (await api.stats(category, session?.sessionId)).lifetime)
     el.profileTossupsHeard.textContent = lifetime.tossups
     el.profilePoints.textContent = lifetime.points
     el.profilePowers.textContent = lifetime.powers
@@ -1374,6 +1420,7 @@ export function initProfile(el) {
     // Science may have none for Literature, and holding a stale key would
     // silently fall back while the nav still read like a choice.
     month = null
+    cache.clear()          // every cached answer was for the previous category
     loadLifetime()
     loadPanel()
     loadProgress()
@@ -1415,6 +1462,7 @@ export function initProfile(el) {
   el.profileExitSessionBtn.addEventListener('click', () => {
     session = null
     month = null
+    cache.clear()
     applyScope()
     pickerButtons()
     loadLifetime()
@@ -1473,6 +1521,11 @@ export function initProfile(el) {
   return function showProfile(scope = null) {
     session = scope
     if (session) month = null
+    // Dropped on every open, not just on a scope change: a tossup answered
+    // since the last visit would otherwise be missing from numbers served out
+    // of memory, and "it never shows stale numbers" is the whole contract of
+    // reloading here.
+    cache.clear()
 
     // Not awaited: the filter is a control, not a prerequisite for the
     // numbers, and blocking the whole page on it would make opening the
@@ -1494,6 +1547,10 @@ export function initProfile(el) {
  *  the identity/stat-tile row itself, since that data is already sitting in
  *  the row that was clicked and needs no extra round trip. */
 export function initSessionPanels(el) {
+  // Records expands a sitting inline and lets you flick between its panels;
+  // without this, each flick re-fetched a session whose answers are finished
+  // and cannot change. Cleared when a different sitting is opened.
+  const cache = makePanelCache()
   const panels = PANELS.filter((p) => p.perSession)
   let current = panels[0].key
   let activeViewKey = null
@@ -1525,7 +1582,8 @@ export function initSessionPanels(el) {
     el.statSubPicker.innerHTML = ''
     try {
       if (panel.views) {
-        const datasets = await Promise.all(panel.views.map((v) => v.load('', sessionId)))
+        const datasets = await Promise.all(panel.views.map((v) =>
+          cache.get(`${panel.key}|${v.key}|${sessionId}`, () => v.load('', sessionId))))
         if (!activeViewKey || !panel.views.some((v) => v.key === activeViewKey)) {
           activeViewKey = panel.views[0].key
         }
@@ -1542,7 +1600,8 @@ export function initSessionPanels(el) {
         render()
         el.statAboutFinding.textContent = panel.finding(datasets[0])
       } else {
-        const data = await panel.load('', sessionId)
+        const data = await cache.get(`${panel.key}||${sessionId}`,
+                                     () => panel.load('', sessionId))
         el.statView.textContent = ''
         el.statView.append(panel.draw(data))
         el.statAboutFinding.textContent = panel.finding(data)
@@ -1553,6 +1612,9 @@ export function initSessionPanels(el) {
   }
 
   return function showSessionPanels(newSessionId) {
+    // A different sitting is a different scope; a re-open of the same one is
+    // not, and its answers are finished, so that case keeps its cache.
+    if (newSessionId !== sessionId) cache.clear()
     sessionId = newSessionId
     current = panels[0].key
     activeViewKey = null

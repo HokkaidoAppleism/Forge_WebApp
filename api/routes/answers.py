@@ -9,12 +9,14 @@ read. So the client sends what it *observed* (which question, how many words
 had been shown, what was typed) and the server derives everything that counts.
 
 **No network call happens inside a database transaction.** Checking a guess
-means asking qbreader, which is allowed six seconds to answer. Holding a
+means asking qbreader, which is allowed three seconds to answer. Holding a
 Postgres transaction open across that would pin a pooled connection -- and its
 row locks -- for the whole wait, and eight of those in a row is the entire
 pool. So the shape is: read (short transaction), check (no transaction), write
 (short transaction).
 """
+
+import threading
 
 import psycopg
 import requests
@@ -31,7 +33,37 @@ from clock import local_day
 bp = Blueprint("answers", __name__, url_prefix="/api")
 
 QBREADER_CHECK = "https://www.qbreader.org/api/check-answer"
-QBREADER_TIMEOUT = 6
+
+# Three seconds, not six. Measured against the real endpoint: a warm connection
+# answers in ~54ms and a cold one in ~330ms, so three seconds is already ~55x
+# the normal case. The old six was time the player spent staring at a frozen
+# reader before the local matcher took over anyway; halving it halves the worst
+# thing that can happen on a buzz, and the fallback is recorded as
+# `scored_offline` either way so a run judged by the weaker checker is still
+# distinguishable in the table.
+QBREADER_TIMEOUT = 3
+
+# One HTTP session per worker thread, kept alive between answers.
+#
+# `requests.get` opens a new TLS connection every call, and against qbreader
+# that handshake *is* the request: measured over six calls each, a fresh
+# connection took a median 328ms and a reused one 54ms. The check was six times
+# slower than it needed to be, on the one request a player is actively waiting
+# on.
+#
+# Thread-local rather than a single shared Session: gunicorn runs four threads
+# per worker, and while `Session` is fine for concurrent gets in practice, its
+# documented thread-safety caveat is real and a per-thread session costs
+# nothing -- each thread simply keeps its own warm connection.
+_http = threading.local()
+
+
+def _qbreader_session():
+    session = getattr(_http, "session", None)
+    if session is None:
+        session = requests.Session()
+        _http.session = session
+    return session
 
 
 def _power_index(question_text):
@@ -58,7 +90,7 @@ def _check_guess(guess, answerline):
         return False, None          # nothing to check; a blank guess is a miss
 
     try:
-        response = requests.get(
+        response = _qbreader_session().get(
             QBREADER_CHECK,
             params={"answerline": answerline, "givenAnswer": guess},
             timeout=QBREADER_TIMEOUT,

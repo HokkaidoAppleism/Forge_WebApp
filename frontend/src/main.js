@@ -148,7 +148,10 @@ let questionGeneration = 0
 const PREFS = 'forgeqb.prefs'
 // Last known category tree, so the reader's boxes can be filled in on the
 // first paint instead of after a round trip. See `loadFilters`.
-const FILTERS_CACHE = 'forgeqb.filters.v1' 
+const FILTERS_CACHE = 'forgeqb.filters.v1'
+// The same idea for Adaptive Learning's subject list. See
+// `loadAdaptiveCatalogue`.
+const ADAPTIVE_CACHE = 'forgeqb.adaptive.v1' 
 // Up here for the same temporal-dead-zone reason, and this one was already a
 // live latent bug rather than a precaution: the auth handler's signed-out
 // branch calls openReader() -> showScreen(), which reads SCREENS, and SCREENS
@@ -638,9 +641,20 @@ function readingDelayMs() {
   return 550 - parseInt(el.readingSpeed.value, 10)
 }
 
+/** The same setting as a number that goes *up* as the slider goes right.
+ *
+ *  The slider is stored as milliseconds-per-word, which runs backwards against
+ *  its own "Slower / Faster" ends: dragging toward Faster made the readout
+ *  count 500 down to 50, so the control looked inverted even though it was
+ *  behaving correctly. Words per minute is the unit a reader actually thinks
+ *  in and it rises with the handle. */
+function readingWordsPerMinute() {
+  return Math.round(60000 / readingDelayMs())
+}
+
 function updateSpeedDisplay() {
   if (!voiceMode) {
-    el.speedDisplay.textContent = `${readingDelayMs()} ms per word`
+    el.speedDisplay.textContent = `${readingWordsPerMinute()} words per minute`
     return
   }
   // A speaking utterance's rate is fixed by the Web Speech API -- it can only
@@ -1174,6 +1188,26 @@ async function finish({ didBuzz, guess }) {
   el.submitAnswerBtn.disabled = true
   el.answerInput.disabled = true
 
+  // Show what we already know, now, instead of freezing until the server
+  // answers. The round trip is roughly a second (an answer check against
+  // qbreader is ~350ms of it, plus two database round trips), and the reader
+  // used to spend all of it as a half-revealed question and a dead button with
+  // nothing to say it was working -- which reads as the app having hung, not
+  // as the app being busy.
+  //
+  // Every word is already in `words`; the only thing genuinely worth waiting
+  // for is the verdict and the answerline. So the rest of the tossup goes up
+  // immediately and the feedback box says what is happening.
+  //
+  // **Except when a rebuzz is still possible**, where the tossup is not over
+  // and revealing it would hand over the clues the player is meant to still be
+  // listening for. That is the same condition the server scores by (see
+  // routes/answers.py: a retry needs `0 < words_read < total_words`), so the
+  // two agree about when the question has actually ended.
+  const retryPossible = allowRebuzz && didBuzz && wordIndex > 0 && wordIndex < words.length
+  if (!retryPossible) paintWords(words.length)
+  showFeedback('Checking your answer…', true)
+
   try {
     const result = await api.submitAnswer({
       questionId: question.id,
@@ -1644,12 +1678,11 @@ el.saveHighlightBtn.addEventListener('click', async () => {
  * already built up, so a subject they have played reads as somewhere to
  * return to instead of as a fresh start.
  */
-async function loadAdaptiveCatalogue() {
-  if (adaptiveCatalogue) return adaptiveCatalogue
-  adaptiveCatalogue = await api.adaptiveCategories()
-
+/** Draw the subject picker from a catalogue payload. */
+function paintAdaptiveCatalogue(catalogue) {
+  adaptiveCatalogue = catalogue
   el.adaptiveCategorySelect.innerHTML = ''
-  for (const category of adaptiveCatalogue.categories) {
+  for (const category of catalogue.categories) {
     const group = document.createElement('optgroup')
     group.label = category.name
 
@@ -1658,7 +1691,7 @@ async function loadAdaptiveCatalogue() {
     group.append(all)
 
     for (const sub of category.subcategories) {
-      const saved = adaptiveCatalogue.inProgress[sub.name]
+      const saved = catalogue.inProgress?.[sub.name]
       group.append(new Option(
         saved
           ? `  ${sub.name} (${sub.clusters} topics · ${saved.questionsServed} seen)`
@@ -1666,6 +1699,40 @@ async function loadAdaptiveCatalogue() {
         sub.name))
     }
     el.adaptiveCategorySelect.append(group)
+  }
+}
+
+/** The Adaptive Learning subject list, from the last known copy first.
+ *
+ *  Same reasoning as `loadFilters`, and it matters more here: the subject list
+ *  is the *first* thing on the Adaptive Learning screen, so a round trip to
+ *  fetch it is a round trip spent looking at an empty picker with nothing to
+ *  choose from. Nearly all of the payload -- which subjects exist, and how many
+ *  topic clusters each has -- is a property of the question set, identical for
+ *  everybody and unchanged until the database is rebuilt.
+ *
+ *  The one part that *is* per-account and does move is `inProgress` ("42 seen"),
+ *  so the cached copy is only ever the first paint: the request still goes out
+ *  and repaints when anything differs. A count that is a few hundred
+ *  milliseconds stale on the way in is worth an instant picker; a picker that
+ *  isn't there yet is not.
+ */
+async function loadAdaptiveCatalogue() {
+  if (adaptiveCatalogue) return adaptiveCatalogue
+
+  let cached = null
+  try { cached = JSON.parse(localStorage.getItem(ADAPTIVE_CACHE)) } catch { cached = null }
+  if (cached?.categories?.length) paintAdaptiveCatalogue(cached)
+
+  const fresh = await api.adaptiveCategories()
+  const serialised = JSON.stringify(fresh)
+  // Skipped when nothing changed: repainting rebuilds the <select> and would
+  // drop a subject the player had already started ticking.
+  if (serialised !== JSON.stringify(cached)) {
+    paintAdaptiveCatalogue(fresh)
+    try { localStorage.setItem(ADAPTIVE_CACHE, serialised) } catch { /* full or blocked */ }
+  } else {
+    adaptiveCatalogue = fresh
   }
   return adaptiveCatalogue
 }
