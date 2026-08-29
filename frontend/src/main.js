@@ -17,6 +17,9 @@ const $ = (id) => document.getElementById(id)
 const el = {
   authScreen: $('authScreen'), authForm: $('authForm'), authMessage: $('authMessage'),
   email: $('email'), password: $('password'),
+  signInBtn: $('signInBtn'), signUpBtn: $('signUpBtn'), forgotPasswordBtn: $('forgotPasswordBtn'),
+  recoveryForm: $('recoveryForm'), recoveryPassword: $('recoveryPassword'),
+  setNewPasswordBtn: $('setNewPasswordBtn'),
   appScreen: $('appScreen'), whoami: $('whoami'), signOutBtn: $('signOutBtn'),
   readerScreen: $('readerScreen'), profileScreen: $('profileScreen'),
   aboutScreen: $('aboutScreen'), adaptiveSetupScreen: $('adaptiveSetupScreen'),
@@ -194,31 +197,151 @@ let countdownInterval = null
 
 // -------------------------------------------------------------------- auth --
 
+// True only between Supabase firing PASSWORD_RECOVERY (the emailed reset link
+// landed back here) and the new password actually being set. The auth-state
+// handler checks it so a recovery session -- which is a real, usable session --
+// does not just drop the player into the app with their old password still
+// live and nothing explaining why they are signed in.
+let recoveringPassword = false
+
+// A re-entry lock, not just the disabled buttons. A disabled submit button
+// still can't be clicked, but a form submits on Enter too, and the same
+// double-request the `submitting` guard stops in finish() is possible here.
+let authInFlight = false
+
+/** Lock or unlock the whole sign-in form as one unit. The handlers below all
+ *  await a network round trip, and without this the buttons stayed live
+ *  through it -- a second click on a slow connection sent a second request,
+ *  and nothing on screen said anything was happening. */
+function authBusy(busy, message) {
+  authInFlight = busy
+  for (const b of [el.signInBtn, el.signUpBtn, el.forgotPasswordBtn, el.setNewPasswordBtn]) {
+    b.disabled = busy
+  }
+  if (message !== undefined) el.authMessage.textContent = message
+}
+
+const NETWORK_DOWN = 'Could not reach the server. Check your connection and try again.'
+
 el.authForm.addEventListener('submit', async (event) => {
+  if (authInFlight) return
   event.preventDefault()
   const mode = event.submitter?.dataset.mode ?? 'signin'
-  el.authMessage.textContent = ''
+  authBusy(true, mode === 'signup' ? 'Creating your account...' : 'Signing in...')
 
   const credentials = { email: el.email.value.trim(), password: el.password.value }
-  const { error } = mode === 'signup'
-    ? await supabase.auth.signUp(credentials)
-    : await supabase.auth.signInWithPassword(credentials)
+  try {
+    const { error } = mode === 'signup'
+      ? await supabase.auth.signUp(credentials)
+      : await supabase.auth.signInWithPassword(credentials)
 
-  if (error) {
-    // Supabase deliberately does not say whether it was the address or the
-    // password that was wrong, and neither should we -- the difference tells
-    // a stranger which addresses have accounts.
-    el.authMessage.textContent = error.message
+    if (error) {
+      // Supabase deliberately does not say whether it was the address or the
+      // password that was wrong, and neither should we -- the difference tells
+      // a stranger which addresses have accounts.
+      authBusy(false, error.message)
+      return
+    }
+    // On sign-in, onAuthStateChange takes over and swaps screens; leave the
+    // "Signing in..." message up until it does rather than clearing it here.
+    authBusy(false, mode === 'signup'
+      ? 'Check your email to confirm the account, then sign in.'
+      : el.authMessage.textContent)
+  } catch (error) {
+    // A network failure rejects rather than returning {error}, so it would
+    // otherwise leave the form locked forever.
+    authBusy(false, NETWORK_DOWN)
+  }
+})
+
+el.forgotPasswordBtn.addEventListener('click', async () => {
+  if (authInFlight) return
+  const email = el.email.value.trim()
+  if (!email) {
+    el.authMessage.textContent = 'Enter your email address first, then press this again.'
+    el.email.focus()
     return
   }
-  if (mode === 'signup') {
-    el.authMessage.textContent = 'Check your email to confirm the account, then sign in.'
+  authBusy(true, 'Sending a reset link...')
+  try {
+    // redirectTo brings the link back to this same app, where the
+    // PASSWORD_RECOVERY branch of onAuthStateChange picks it up.
+    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: window.location.origin,
+    })
+    // Same reason as a wrong password above: "no account with that email"
+    // would confirm which addresses are registered, so the message does not
+    // depend on whether one exists.
+    authBusy(false, error
+      ? error.message
+      : 'If an account uses ' + email + ', a reset link is on its way. Open it in this browser.')
+  } catch (error) {
+    authBusy(false, NETWORK_DOWN)
+  }
+})
+
+el.recoveryForm.addEventListener('submit', async (event) => {
+  if (authInFlight) return
+  event.preventDefault()
+  const next = el.recoveryPassword.value
+  if (next.length < 8) {
+    el.authMessage.textContent = 'Password must be at least 8 characters.'
+    return
+  }
+  authBusy(true, 'Setting your new password...')
+  try {
+    const { error } = await supabase.auth.updateUser({ password: next })
+    if (error) {
+      authBusy(false, error.message)
+      return
+    }
+    el.recoveryPassword.value = ''
+    el.recoveryForm.classList.add('hidden')
+    el.recoveryForm.classList.remove('flex')
+    el.authForm.classList.remove('hidden')
+    authBusy(false, 'Password updated. Signing you in...')
+    // The recovery session is already a full session, so the normal signed-in
+    // path is exactly right once the password is set.
+    const { data: { session } } = await supabase.auth.getSession()
+    if (session) enterApp(session)
+  } catch (error) {
+    authBusy(false, NETWORK_DOWN)
   }
 })
 
 el.signOutBtn.addEventListener('click', () => supabase.auth.signOut())
 
-supabase.auth.onAuthStateChange((_event, session) => {
+/** The signed-in path, split out so the password-recovery flow can reach it
+ *  directly once it has set a password. */
+function enterApp(session) {
+  recoveringPassword = false
+  el.authScreen.classList.add('hidden')
+  el.authScreen.classList.remove('flex')
+  el.appScreen.classList.remove('hidden')
+  signedInEmail = session.user.email
+  updateWhoami(signedInEmail)
+  loadFilters()
+  resetSessionStats()
+}
+
+supabase.auth.onAuthStateChange((event, session) => {
+  // The reset link just landed. Supabase has created a temporary session, but
+  // the player came here to set a password, not to use the app -- so hold on
+  // the auth screen and show the recovery form instead of falling through.
+  if (event === 'PASSWORD_RECOVERY') {
+    recoveringPassword = true
+    el.authScreen.classList.remove('hidden')
+    el.authScreen.classList.add('flex')
+    el.appScreen.classList.add('hidden')
+    el.authForm.classList.add('hidden')
+    el.recoveryForm.classList.remove('hidden')
+    el.recoveryForm.classList.add('flex')
+    el.authMessage.textContent = ''
+    el.recoveryPassword.focus()
+    return
+  }
+  if (recoveringPassword && session) return   // handled by the recovery form's own submit
+
   const signedIn = Boolean(session)
   // `hidden` is a class here, not the attribute: the two screens are flex
   // containers, and `display: flex` from a utility class beats the attribute's
@@ -228,10 +351,7 @@ supabase.auth.onAuthStateChange((_event, session) => {
   el.appScreen.classList.toggle('hidden', !signedIn)
 
   if (signedIn) {
-    signedInEmail = session.user.email
-    updateWhoami(signedInEmail)
-    loadFilters()
-    resetSessionStats()
+    enterApp(session)
   } else {
     abandonTossup()
     openReader()
@@ -552,7 +672,11 @@ if (!voice.voiceSupported()) {
 
 el.voiceModeToggle.addEventListener('change', () => {
   voiceMode = el.voiceModeToggle.checked
+  // Both classes, matching the modal show/hide idiom elsewhere: the row is a
+  // <label>, which is display:inline by default, so removing `hidden` alone
+  // left `items-center`/`gap-2` inert and the checkbox unaligned.
   el.showTextRow.classList.toggle('hidden', !voiceMode)
+  el.showTextRow.classList.toggle('flex', voiceMode)
   updateSpeedDisplay()
 
   const inProgress = words.length > 0 && !buzzed && wordIndex < words.length
@@ -1079,7 +1203,18 @@ async function finish({ didBuzz, guess }) {
       paintAdaptiveStats()
     }
   } catch (error) {
-    showFeedback(error.message, false)
+    // The request failed -- a dropped connection, a 500, qbreader timing out.
+    // Nothing was scored, so this has to be retryable: hand the Submit button
+    // and the answer box back with what was typed still in place, rather than
+    // leaving a dead question that can only be abandoned with Next. This is
+    // the same dead-end that bit Add to Missed and the notebook deletes, on
+    // the one path where it matters most.
+    showFeedback(`${escapeHtml(error.message)} — press Submit to try again.`, false)
+    if (buzzed && question) {
+      el.submitAnswerBtn.disabled = false
+      el.answerInput.disabled = false
+      el.answerInput.focus()
+    }
   } finally {
     // Released in a finally: a backend that disappears mid-answer would
     // otherwise leave this stuck and silently ignore every later submit.

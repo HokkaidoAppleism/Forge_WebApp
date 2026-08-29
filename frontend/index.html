@@ -24,16 +24,37 @@
           <input id="email" type="email" placeholder="you@example.com" required
                  autocomplete="email"
                  class="rounded-lg border border-[#584741] bg-[#1d1816] p-3 focus:border-[#efe0db] focus:outline-none" aria-label="Email address" />
+          <!-- No minlength on sign-in: the rule is the server's to enforce on a
+               new password, and blocking the submit here only stops someone
+               whose existing password predates the rule from getting in to
+               change it. minlength stays on the recovery field below. -->
           <input id="password" type="password" placeholder="Password" required
-                 minlength="8" autocomplete="current-password"
+                 autocomplete="current-password"
                  class="rounded-lg border border-[#584741] bg-[#1d1816] p-3 focus:border-[#efe0db] focus:outline-none" aria-label="Password" />
           <div class="flex gap-2">
-            <button type="submit" data-mode="signin"
-                    class="flex-1 rounded-full bg-[#efe0db] px-4 py-2 font-bold text-[#1d1816]">Sign in</button>
-            <button type="submit" data-mode="signup"
-                    class="flex-1 rounded-full bg-[#3e322e] px-4 py-2 font-bold">Create account</button>
+            <button id="signInBtn" type="submit" data-mode="signin"
+                    class="flex-1 rounded-full bg-[#efe0db] px-4 py-2 font-bold text-[#1d1816] disabled:opacity-50">Sign in</button>
+            <button id="signUpBtn" type="submit" data-mode="signup"
+                    class="flex-1 rounded-full bg-[#3e322e] px-4 py-2 font-bold disabled:opacity-50">Create account</button>
           </div>
+          <button id="forgotPasswordBtn" type="button"
+                  class="self-start text-xs text-text-muted underline hover:text-[#efe0db]">Forgot your password?</button>
         </form>
+
+        <!-- Shown only after the emailed reset link lands back here: Supabase
+             fires PASSWORD_RECOVERY with a temporary session, and the app has
+             to collect a new password before that session is any use. Without
+             this the link led to a signed-in app with the old password still
+             set and nothing saying so. -->
+        <form id="recoveryForm" class="mt-5 hidden flex-col gap-3">
+          <p class="text-sm text-text-muted">Set a new password for your account.</p>
+          <input id="recoveryPassword" type="password" placeholder="New password" required
+                 minlength="8" autocomplete="new-password"
+                 class="rounded-lg border border-[#584741] bg-[#1d1816] p-3 focus:border-[#efe0db] focus:outline-none" aria-label="New password" />
+          <button id="setNewPasswordBtn" type="submit"
+                  class="rounded-full bg-[#efe0db] px-4 py-2 font-bold text-[#1d1816] disabled:opacity-50">Set new password</button>
+        </form>
+
         <p id="authMessage" class="mt-3 text-sm text-[#f6b17a]"></p>
       </div>
     </div>
