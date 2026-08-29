@@ -1,0 +1,18 @@
+# This repo is developed on Windows and deployed to Linux. A CRLF that sneaks
+# into a deploy file breaks it quietly: `Procfile` becomes `web: ...\r` and the
+# process name is wrong; `requirements.txt` asks pip for a file literally named
+# `...\r`. Force LF on everything text, and especially on the files the build
+# reads.
+* text=auto eol=lf
+
+Procfile        text eol=lf
+*.txt           text eol=lf
+*.py            text eol=lf
+*.toml          text eol=lf
+*.json          text eol=lf
+*.sh            text eol=lf
+
+# Leave the frontend build output and binaries alone.
+*.png binary
+*.jpg binary
+*.woff2 binary
