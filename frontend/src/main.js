@@ -1802,18 +1802,29 @@ el.saveAndQuitAdaptiveBtn.addEventListener('click', async () => {
   try {
     // Nothing is flushed here -- the skill model was written on every question
     // and every answer, so closing the tab loses none of it. This only records
-    // the session summary.
+    // the session summary that the Records page lists.
     if (restoreKey) {
       await api.adaptiveEnd(restoreKey, adaptive.sessionId, adaptive.startedAt)
     }
   } catch (error) {
-    console.error(error)
-  } finally {
+    // The save failed, so the sitting will not appear in Records. This used to
+    // log to the console and end the session in a `finally` anyway: the player
+    // pressed Save & Quit, the record was silently not written, the session was
+    // torn down, and nothing on screen said so. Recording the sitting is the
+    // entire job of this button, so a failure has to be visible and the session
+    // has to survive for a second try.
     el.saveAndQuitAdaptiveBtn.disabled = false
-    leaveAdaptive()
-    abandonTossup()
-    el.questionContainer.textContent = 'Click “Start Reader” to start practicing'
+    showFeedback(
+      `Could not save this session: ${escapeHtml(error.message)}. ` +
+      'Your skill progress is already saved — only the Records entry failed. ' +
+      'Press Save &amp; Quit again to retry.', false)
+    return
   }
+  el.saveAndQuitAdaptiveBtn.disabled = false
+  leaveAdaptive()
+  abandonTossup()
+  el.questionContainer.textContent = idlePrompt()
+  toast('Session saved to Records')
 })
 
 function leaveAdaptive() {
