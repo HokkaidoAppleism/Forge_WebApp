@@ -1,0 +1,10 @@
+# Railway / Nixpacks builds from the repository root, and this file is the
+# marker that tells it "this is a Python app". The actual dependency list lives
+# next to the code it serves; this just points at it.
+#
+# Without a Python marker at the root, Nixpacks cannot generate a build plan at
+# all -- the app is one directory down in api/ -- and the deploy fails before it
+# ever runs a line of Python. The alternative is setting a Root Directory in
+# the Railway service settings; keeping it in the repo means the build works on
+# a fresh service with no dashboard configuration.
+-r api/requirements.txt

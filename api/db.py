@@ -24,12 +24,15 @@ day, and the point is not to depend on a good day.
 """
 
 import json
+import logging
 from contextlib import contextmanager
 
 from psycopg.rows import dict_row
-from psycopg_pool import ConnectionPool
+from psycopg_pool import ConnectionPool, PoolTimeout
 
 import config
+
+log = logging.getLogger(__name__)
 
 pool = ConnectionPool(
     config.DATABASE_URL,
@@ -41,8 +44,28 @@ pool = ConnectionPool(
 
 
 def open_pool():
+    """Open the pool at startup, but do not die if the database is slow to answer.
+
+    This runs at import time, inside `create_app()`, which means a raise here
+    stops `app = create_app()` from ever binding -- gunicorn then cannot load
+    `app:app` and *every* request 502s, `/api/health` included, on a crash
+    loop with no app code in the trace. A cold Supabase instance or a brief
+    network blip at deploy time is enough to trigger that.
+
+    `pool.open()` starts the background connection task regardless; `wait()`
+    only blocks boot until the first connection is ready. If it isn't ready in
+    time, the pool keeps trying on its own and the first data request either
+    succeeds a moment later or surfaces a real database error -- both of which
+    are recoverable, unlike a deploy that never came up.
+    """
     pool.open()
-    pool.wait(timeout=15)
+    try:
+        pool.wait(timeout=10)
+    except PoolTimeout:
+        log.warning(
+            "Database not reachable within 10s of startup; continuing. The "
+            "connection pool will keep retrying in the background."
+        )
 
 
 def close_pool():

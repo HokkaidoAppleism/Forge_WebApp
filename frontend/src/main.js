@@ -904,16 +904,29 @@ function abandonTossup() {
 
 async function loadQuestion(fetcher) {
   abandonTossup()
+  // abandonTossup() bumped questionGeneration; anything that resolves against a
+  // different value has been superseded. Spamming Next Question -- or the `n`
+  // shortcut -- used to fire several of these at once: each response set
+  // `words`/`wordIndex` and started its own `tick()` loop, so two revealers
+  // ran together at double speed over whichever question landed last, and the
+  // buzz/celerity maths was reading a `words` array from a different tossup
+  // than the one on screen.
+  const gen = questionGeneration
   el.questionContainer.textContent = 'Loading…'
+
+  let loaded
   try {
-    question = await fetcher()
+    loaded = await fetcher()
   } catch (error) {
+    if (gen !== questionGeneration) return
     el.questionContainer.textContent = error instanceof ApiError && error.empty
       ? error.message
       : 'Could not load a question.'
     if (error instanceof ApiError && error.empty && reviewMode) leaveReview()
     return
   }
+  if (gen !== questionGeneration) return   // a newer loadQuestion is now in charge
+  question = loaded
 
   // The queue isn't empty, but nothing in it is actually due yet -- the
   // server still offers the soonest-scheduled one so a player who wants to
