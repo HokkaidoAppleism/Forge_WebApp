@@ -120,74 +120,46 @@ def copy_questions(sqlite_conn, pg_conn, batch=5000):
           f"(no question or no answer), {time.time() - started:.1f}s")
 
 
-def upsert_questions(sqlite_conn, pg_conn, batch=5000, merge_span=20000):
-    """Add new questions and update changed ones, keyed on id.
+def upsert_questions(sqlite_conn, pg_conn, batch=5000):
+    """Add the questions Postgres does not have yet. Existing rows are left alone.
 
-    COPY every row into a staging table, then merge it into `public.questions`
-    in id-range slices. A per-row `executemany` over a connection to another
-    data centre is ~56ms a round trip and 185k of those never finishes; a
-    single `INSERT ... SELECT` over all of them hits Supabase's
-    `statement_timeout` on the index maintenance. Slicing by id keeps each
-    merge statement small and lets progress show.
+    An upsert over all rows was tried and abandoned: rewriting 169k unchanged
+    rows -- every index entry, including the 194MB table's trigram GIN --
+    runs for minutes and hits Supabase's statement_timeout. The only thing a
+    refresh actually adds is the new questions; their ids are all past the old
+    maximum, so "the ones Postgres is missing" is exact.
 
-    `set_year`/`packet_number`/`question_number` are in the update list too,
-    not just `cluster_label` -- a re-ingest can correct a field on an old row
-    (--repair does exactly that), and this is the only route those reach the
-    website.
+    A field corrected on an *old* row (the --repair pass), or a cluster_label
+    changed by a re-clustering run, is NOT carried over here. Those are rarer
+    and belong to their own targeted update; a blanket rewrite is the wrong
+    tool. `copy_cluster_labels` below still upserts the names table in full.
     """
-    total = sqlite_conn.execute("select count(*) from questions").fetchone()[0]
-    lo, hi = sqlite_conn.execute("select min(id), max(id) from questions").fetchone()
-    print(f"questions in sqlite: {total:,}  (staged upsert on id, {lo:,}..{hi:,})")
+    have = {r[0] for r in pg_conn.execute("select id from public.questions")}
+    print(f"  postgres has {len(have):,} ids")
 
     cols = ", ".join(QUESTION_COLUMNS)
-    updates = ", ".join(f"{c} = excluded.{c}"
-                        for c in QUESTION_COLUMNS if c != "id")
+    rows = sqlite_conn.execute(f"select {cols} from questions order by id")
+    added = skipped = 0
     started = time.time()
-
     with pg_conn.cursor() as cur:
-        # Not ON COMMIT DROP: the merge below is several statements and we do
-        # not want the staging table vanishing under an autocommit. Dropped by
-        # hand at the end.
-        cur.execute("drop table if exists _stage_questions")
-        cur.execute("create temporary table _stage_questions "
-                    "(like public.questions including defaults)")
-
-        rows = sqlite_conn.execute(f"select {cols} from questions order by id")
-        staged = skipped = 0
-        with cur.copy(f"copy _stage_questions ({cols}) from stdin") as copy:
+        with cur.copy(f"copy public.questions ({cols}) from stdin") as copy:
             while True:
                 chunk = rows.fetchmany(batch)
                 if not chunk:
                     break
                 for row in chunk:
+                    if row[0] in have:
+                        continue
                     cleaned = _clean_row(row)
                     if cleaned is None:
                         skipped += 1
                         continue
                     copy.write_row(cleaned)
-                    staged += 1
-                print(f"  staged {staged:,} / {total:,}", end="\r", flush=True)
-        print(f"  staged {staged:,}, {skipped:,} skipped; merging in slices...")
+                    added += 1
+                print(f"  +{added:,} new", end="\r", flush=True)
 
-        merged = 0
-        start = lo
-        while start <= hi:
-            end = start + merge_span - 1
-            cur.execute(
-                f"insert into public.questions ({cols}) "
-                f"select {cols} from _stage_questions "
-                f"where id between %s and %s "
-                f"on conflict (id) do update set {updates}",
-                (start, end))
-            merged += cur.rowcount
-            pg_conn.commit()
-            print(f"  merged up to id {min(end, hi):,}  ({merged:,} rows)", flush=True)
-            start = end + 1
-
-        cur.execute("drop table _stage_questions")
-        pg_conn.commit()
-
-    print(f"  {merged:,} rows added or updated, {time.time() - started:.1f}s")
+    print(f"  {added:,} added, {skipped:,} skipped "
+          f"(no question or no answer), {time.time() - started:.1f}s")
 
 
 def copy_cluster_labels(sqlite_conn, pg_conn):
