@@ -139,6 +139,24 @@
                 <option value="10">10</option>
               </select>
             </label>
+
+            <!-- Year range. Two range inputs stacked in the same track, the
+                 way qbreader does it -- one drags the low end, one the high.
+                 min/max/value are placeholders; loadFilters() sets them from
+                 the real bounds the API reports, and hides the whole block if
+                 for some reason it can't. -->
+            <div id="yearRangeWrapper" class="mt-4 hidden">
+              <div class="flex items-center justify-between text-sm font-medium text-[#baa7a1]">
+                <span>Year range</span>
+                <span id="yearRangeLabel" class="tabular-nums">—</span>
+              </div>
+              <div class="year-range relative mt-3 h-5">
+                <input id="yearMin" type="range" min="2000" max="2026" value="2000"
+                       class="year-range-input" aria-label="Earliest year" />
+                <input id="yearMax" type="range" min="2000" max="2026" value="2026"
+                       class="year-range-input" aria-label="Latest year" />
+              </div>
+            </div>
           </div>
 
           <!-- Allow rebuzzes: a wrong guess with words still unread resumes

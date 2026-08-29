@@ -31,8 +31,62 @@ _PUBLIC_COLUMNS = (
 )
 
 
+# The years the question set actually spans. A filter offering years with
+# nothing behind them is a filter that can return nothing for reasons the
+# player cannot see, so the picker is built from these rather than from a
+# hardcoded pair. Derived once per process for the same reason `filter_tree`
+# is -- it is a property of the shared, read-only question set.
+_year_bounds = None
+
+
+def year_bounds():
+    """(earliest, latest) set year in the bank."""
+    global _year_bounds
+    if _year_bounds is None:
+        with db.content_tx() as conn:
+            row = conn.execute(
+                "select min(set_year) as lo, max(set_year) as hi "
+                "from public.questions where set_year is not null").fetchone()
+        _year_bounds = (row["lo"], row["hi"])
+    return _year_bounds
+
+
+def _year_range():
+    """`?yearMin=` / `?yearMax=`, clamped to what actually exists.
+
+    Returned as a range rather than a list of years the way `difficulty` is
+    handled: a range is one index-friendly `between`, and it is also what the
+    control on screen is -- a two-handled slider, not twenty-seven checkboxes.
+
+    Both ends are optional and clamped rather than rejected. A client asking
+    for 1900-2100 wants "everything", not an error, and answering a request
+    for a year the set has never had with a 400 would be a filter that fails
+    instead of a filter that matches nothing.
+    """
+    lo, hi = year_bounds()
+    if lo is None:
+        return None, None
+
+    def read(name, fallback):
+        raw = request.args.get(name)
+        if raw is None or not str(raw).strip():
+            return fallback
+        try:
+            return max(lo, min(hi, int(raw)))
+        except (TypeError, ValueError):
+            return fallback
+
+    low, high = read("yearMin", lo), read("yearMax", hi)
+    # Handles dragged past each other read as the range between them rather
+    # than as an empty one.
+    if low > high:
+        low, high = high, low
+    return low, high
+
+
 def _filters():
-    """Parse repeated ?category= / ?subcategory= / ?difficulty= params.
+    """Parse repeated ?category= / ?subcategory= / ?difficulty= params, plus
+    the ?yearMin= / ?yearMax= range.
 
     Returns (sql_fragments, params). Built as a list rather than as one
     `(%s is null or col = any(%s))` expression: that shape reads as tidier and
@@ -58,6 +112,17 @@ def _filters():
     if difficulties:
         clauses.append("difficulty = any(%s)")
         params.append(difficulties)
+
+    low, high = _year_range()
+    # Only narrowed when it actually narrows something. The whole span is the
+    # default, and adding `between 2000 and 2026` to every query would cost an
+    # index decision for a condition that excludes nothing -- and would also
+    # silently drop the handful of rows with no set_year at all.
+    if low is not None:
+        lo, hi = year_bounds()
+        if (low, high) != (lo, hi):
+            clauses.append("set_year between %s and %s")
+            params.extend([low, high])
 
     return clauses, params
 
@@ -332,4 +397,6 @@ def filters():
     Cached per process (see `filter_tree`), so only the first request after a
     deploy pays for the scan.
     """
-    return jsonify({"categories": filter_tree()})
+    lo, hi = year_bounds()
+    return jsonify({"categories": filter_tree(),
+                    "years": {"min": lo, "max": hi}})

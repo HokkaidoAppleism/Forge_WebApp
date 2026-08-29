@@ -71,6 +71,8 @@ const el = {
 
   categorySelect: $('categorySelect'), subcategorySelect: $('subcategorySelect'),
   subcategoryWrapper: $('subcategoryWrapper'), difficultySelect: $('difficultySelect'),
+  yearRangeWrapper: $('yearRangeWrapper'), yearRangeLabel: $('yearRangeLabel'),
+  yearMin: $('yearMin'), yearMax: $('yearMax'),
 
   powerHighlightToggle: $('powerHighlightToggle'), allowRebuzzToggle: $('allowRebuzzToggle'),
   readingSpeed: $('readingSpeed'), speedDisplay: $('speedDisplay'),
@@ -555,6 +557,7 @@ async function loadFilters() {
 
   try {
     const payload = await api.filters()
+    applyYearBounds(payload.years)
     const fresh = payload.categories
     const serialised = JSON.stringify(fresh)
     if (serialised !== JSON.stringify(cached)) {
@@ -569,6 +572,59 @@ async function loadFilters() {
     // the next question it tries to fetch.
     console.error(error)
   }
+}
+
+/** The full span the question set actually covers, from the API. Until it
+ *  arrives the slider stays hidden -- min/max in the HTML are placeholders,
+ *  and a slider whose ends are guessed can silently exclude real years. */
+let yearBounds = null
+
+/** Fit the two handles inside `bounds`, keeping whatever the player had picked
+ *  where it still fits. */
+function applyYearBounds(bounds) {
+  if (!bounds || bounds.min == null || bounds.max == null || bounds.min === bounds.max) {
+    el.yearRangeWrapper.classList.add('hidden')
+    yearBounds = null
+    return
+  }
+  yearBounds = bounds
+  const clamp = (v, fb) => {
+    const n = Number(v)
+    return Number.isFinite(n) ? Math.min(bounds.max, Math.max(bounds.min, n)) : fb
+  }
+  for (const input of [el.yearMin, el.yearMax]) {
+    input.min = bounds.min
+    input.max = bounds.max
+  }
+  // Saved picks first, then the full span.
+  let saved = {}
+  try { saved = JSON.parse(localStorage.getItem(PREFS)) ?? {} } catch { saved = {} }
+  el.yearMin.value = clamp(saved.yearMin, bounds.min)
+  el.yearMax.value = clamp(saved.yearMax, bounds.max)
+  if (Number(el.yearMin.value) > Number(el.yearMax.value)) {
+    el.yearMin.value = bounds.min
+    el.yearMax.value = bounds.max
+  }
+  el.yearRangeWrapper.classList.remove('hidden')
+  paintYearLabel()
+}
+
+/** Keep the two handles from crossing, and update the readout. */
+function paintYearLabel() {
+  let lo = Number(el.yearMin.value)
+  let hi = Number(el.yearMax.value)
+  // Whichever handle was just moved is the one that gives -- push the other.
+  if (lo > hi) {
+    if (document.activeElement === el.yearMin) el.yearMax.value = String(lo), (hi = lo)
+    else el.yearMin.value = String(hi), (lo = hi)
+  }
+  el.yearRangeLabel.textContent =
+    lo === hi ? String(lo) : `${lo} – ${hi}`
+}
+
+for (const input of [$('yearMin'), $('yearMax')]) {
+  input.addEventListener('input', paintYearLabel)
+  input.addEventListener('change', savePrefs)
 }
 
 /** Puts the saved category/subcategory/difficulty picks back after the
@@ -627,10 +683,20 @@ el.difficultySelect.addEventListener('change', savePrefs)
 function questionFilters() {
   const subcategory = chosen(el.subcategorySelect)
   const difficulty = chosen(el.difficultySelect)
-  return {
+  const filters = {
     ...(subcategory.length ? { subcategory } : { category: chosen(el.categorySelect) }),
     ...(difficulty.length ? { difficulty } : {}),
   }
+  // Only sent when the handles are inside the full span. At the extremes it is
+  // "any year", and the server treats a missing range the same way -- so
+  // nothing is gained by sending 2000-2026 except an index decision.
+  if (yearBounds) {
+    const lo = Number(el.yearMin.value)
+    const hi = Number(el.yearMax.value)
+    if (lo > yearBounds.min) filters.yearMin = lo
+    if (hi < yearBounds.max) filters.yearMax = hi
+  }
+  return filters
 }
 
 // ---------------------------------------------------------------- the read --
@@ -1959,6 +2025,11 @@ function savePrefs() {
     categories: chosen(el.categorySelect),
     subcategories: chosen(el.subcategorySelect),
     difficulties: chosen(el.difficultySelect),
+    // Stored even when they sit at the full span, so a later run whose bank
+    // has grown still gets the player's own choice back rather than the new
+    // wider default.
+    yearMin: Number(el.yearMin.value) || undefined,
+    yearMax: Number(el.yearMax.value) || undefined,
   }))
 }
 

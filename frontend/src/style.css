@@ -49,6 +49,44 @@
   input[type="range"]::-moz-range-track {
     background: transparent;
   }
+
+  /* Dual-thumb year slider (qbreader-style): two <input type=range> stacked in
+     the same 20px-high box. The lower one keeps pointer events so it can be
+     dragged; the upper one is made click-through *except* on its thumb, so
+     whichever handle you grab is the one that moves. A shared painted track
+     sits behind both. */
+  .year-range {
+    --track: #584741;
+  }
+  .year-range::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 50%;
+    height: 4px;
+    transform: translateY(-50%);
+    border-radius: 9999px;
+    background: var(--track);
+  }
+  .year-range-input {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    background: none;
+    -webkit-appearance: none;
+    appearance: none;
+    pointer-events: none;   /* the thumb re-enables it below */
+  }
+  .year-range-input::-webkit-slider-thumb {
+    pointer-events: auto;
+  }
+  .year-range-input::-moz-range-thumb {
+    pointer-events: auto;
+  }
 }
 
 @layer components {
