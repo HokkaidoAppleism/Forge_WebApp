@@ -121,7 +121,14 @@ function answerHistoryEl(item) {
   return wrap
 }
 
-export function initBrowse() {
+/** `getCategories` returns the reader's own already-loaded category tree
+ *  (main.js's `filters`) so this screen's dropdown doesn't cost its own round
+ *  trip to `/api/questions/filters` every time it opens -- it used to fetch
+ *  an independent copy of the exact same data on every visit, which is real
+ *  latency added to a screen that already has two other requests in flight
+ *  (the review summary and the question page itself) and nothing this data
+ *  needed that main.js hadn't already fetched. */
+export function initBrowse(getCategories) {
   const el = {
     categoryFilter: $('browseCategoryFilter'),
     status: $('browseStatus'),
@@ -135,6 +142,45 @@ export function initBrowse() {
   // it, typing fast can land an earlier, slower response after a later one
   // and leave the list showing results for a term no longer in the box.
   let requestToken = 0
+
+  // Turning the page felt slow -- every click paid for a fresh round trip
+  // even though the neighbouring page had already been fetched a moment ago,
+  // or was about to be needed. Two things fix that together: pages already
+  // seen this visit are kept here so paging back to one is instant, and
+  // whichever pages are next in either direction are quietly fetched right
+  // after a page renders, so by the time Next/Previous is actually clicked
+  // the answer is usually already sitting in the cache. Keyed on everything
+  // that changes the result set, so a filter/search change can never serve a
+  // stale page from a different query. Cleared whenever this screen is
+  // opened fresh (see `showBrowse` below) -- answering a question elsewhere
+  // changes its status here, and a visit that starts stale all the way
+  // through would be worse than the round trip it's saving.
+  const pageCache = new Map()
+  const keyFor = (p, term) => JSON.stringify({
+    page: p, status: el.status.value,
+    category: el.categoryFilter.value === 'all' ? '' : el.categoryFilter.value,
+    term,
+  })
+  function fetchPage(p, term) {
+    return api.browseQuestions({
+      page: p, status: el.status.value, q: term,
+      category: el.categoryFilter.value === 'all' ? '' : el.categoryFilter.value,
+    })
+  }
+  /** Quietly warm the cache for the page(s) next in reach from `page`, so a
+   *  click that lands on one of them is instant. Never touches what's on
+   *  screen -- a slow or failed prefetch just leaves that page uncached,
+   *  same as before this existed, and the next real click for it pays the
+   *  round trip itself same as always. */
+  function prefetchNeighbors(term, hasMore) {
+    const targets = page > 1 ? [page - 1] : []
+    if (hasMore) targets.push(page + 1)
+    for (const p of targets) {
+      const key = keyFor(p, term)
+      if (pageCache.has(key)) continue
+      fetchPage(p, term).then((payload) => pageCache.set(key, payload)).catch(() => {})
+    }
+  }
 
   el.categoryFilter.addEventListener('change', () => { page = 1; load() })
   el.status.addEventListener('change', () => { page = 1; load() })
@@ -156,16 +202,22 @@ export function initBrowse() {
     }
     el.searchNote.classList.add('hidden')
 
+    const key = keyFor(page, term)
+    const cached = pageCache.get(key)
+    if (cached) {
+      renderList(cached.items, term)
+      renderPaging(cached)
+      prefetchNeighbors(term, cached.hasMore)
+      return
+    }
+
     const token = ++requestToken
     el.list.innerHTML = '<p class="text-text-muted">Loading…</p>'
     el.paging.innerHTML = ''
 
     let payload
     try {
-      payload = await api.browseQuestions({
-        page, status: el.status.value, q: term,
-        category: el.categoryFilter.value === 'all' ? '' : el.categoryFilter.value,
-      })
+      payload = await fetchPage(page, term)
     } catch (error) {
       if (token !== requestToken) return
       el.list.innerHTML = `<p class="text-red-400">${escapeHtml(error.message)}</p>`
@@ -173,29 +225,26 @@ export function initBrowse() {
     }
     if (token !== requestToken) return
 
+    pageCache.set(key, payload)
     renderList(payload.items, term)
     renderPaging(payload)
+    prefetchNeighbors(term, payload.hasMore)
   }
 
   /** The category picker is filled from the reader's own filter tree, so it
    *  offers every category in the set -- not just the ones already played,
-   *  which is what the review page's counts-derived list gives. */
-  async function loadCategories() {
-    try {
-      // `/api/questions/filters` answers `{categories: [...]}`, each with its
-      // own question count -- shown here because "History (37,899)" tells you
-      // what a filter is about to do in a way the bare name does not.
-      const { categories } = await api.filters()
-      const chosen = el.categoryFilter.value
-      el.categoryFilter.innerHTML = '<option value="all">All categories</option>' +
-        (categories ?? []).map((c) =>
-          `<option value="${escapeHtml(c.category)}">` +
-          `${escapeHtml(c.category)} (${c.questions.toLocaleString()})</option>`).join('')
-      if (chosen) el.categoryFilter.value = chosen
-    } catch {
-      // A picker that failed to fill still leaves "All categories" usable,
-      // which is the default anyway -- not worth blocking the page over.
-    }
+   *  which is what the review page's counts-derived list gives. Synchronous:
+   *  `getCategories()` reads whatever main.js already has in memory (painted
+   *  from cache on the very first frame, refreshed behind it -- see
+   *  `loadFilters`'s own comment), so opening this screen never waits on it. */
+  function paintCategories() {
+    const categories = getCategories ? getCategories() : []
+    const chosen = el.categoryFilter.value
+    el.categoryFilter.innerHTML = '<option value="all">All categories</option>' +
+      categories.map((c) =>
+        `<option value="${escapeHtml(c.category)}">` +
+        `${escapeHtml(c.category)} (${c.questions.toLocaleString()})</option>`).join('')
+    if (chosen) el.categoryFilter.value = chosen
   }
 
   function renderList(items, term) {
@@ -302,6 +351,11 @@ export function initBrowse() {
         remove.disabled = true
         try {
           await api.removeFromReview(item.id)
+          // A removal changes what every cached page's status filter would
+          // now return -- serving one of them here would show the question
+          // just removed as still in the list, or hide one that just moved
+          // into "unseen" further down the set.
+          pageCache.clear()
           load()
         } catch (error) {
           remove.disabled = false
@@ -342,7 +396,12 @@ export function initBrowse() {
   }
 
   return function showBrowse() {
-    loadCategories()
+    // Stale relative to whatever happened since the last visit -- answering
+    // a question elsewhere changes its status here. Paging back and forth
+    // within *this* visit still comes from the cache; only a fresh open of
+    // the screen pays for a real fetch again.
+    pageCache.clear()
+    paintCategories()
     load()
   }
 }

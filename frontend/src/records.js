@@ -61,6 +61,27 @@ export function initRecords({ onBack }) {
 
   let page = 1
 
+  // Same shape as browse.js's `pageCache`: paging Previous/Next, or flipping
+  // the category filter back to one already seen this visit, used to pay a
+  // fresh round trip every time even though the page had just shown that
+  // exact list. Keyed on everything that changes the result set, warmed for
+  // whichever page is next in reach right after a page renders, and dropped
+  // whenever a session is deleted (every cached page's counts and "which page
+  // a row falls on" are stale the instant a row leaves the table) or the
+  // screen is opened fresh (see `openRecords` below).
+  const pageCache = new Map()
+  const keyFor = (p, category) => JSON.stringify({ page: p, category })
+  function fetchPage(p, category) { return api.adaptiveSessions(category, p) }
+  function prefetchNeighbors(category, hasMore) {
+    const targets = page > 1 ? [page - 1] : []
+    if (hasMore) targets.push(page + 1)
+    for (const p of targets) {
+      const key = keyFor(p, category)
+      if (pageCache.has(key)) continue
+      fetchPage(p, category).then((payload) => pageCache.set(key, payload)).catch(() => {})
+    }
+  }
+
   el.backBtn.addEventListener('click', onBack)
   el.filter.addEventListener('change', () => { page = 1; load() })
   el.closeDetailBtn.addEventListener('click', () => el.detail.classList.add('hidden'))
@@ -92,20 +113,36 @@ export function initRecords({ onBack }) {
   }
 
   async function load() {
-    el.list.innerHTML = '<p class="text-text-muted">Loading records…</p>'
-    el.paging.innerHTML = ''
     // A filtered-out or deleted session can't stay open behind the list.
     el.detail.classList.add('hidden')
 
+    const category = el.filter.value || 'all'
+    const key = keyFor(page, category)
+    const cached = pageCache.get(key)
+    if (cached) {
+      paint(cached)
+      prefetchNeighbors(category, cached.hasMore)
+      return
+    }
+
+    el.list.innerHTML = '<p class="text-text-muted">Loading records…</p>'
+    el.paging.innerHTML = ''
+
     let payload
     try {
-      payload = await api.adaptiveSessions(el.filter.value || 'all', page)
+      payload = await fetchPage(page, category)
     } catch (error) {
       el.list.innerHTML = `<p class="text-red-400">${escapeHtml(error.message)}</p>`
       el.summary.innerHTML = ''
       return
     }
 
+    pageCache.set(key, payload)
+    paint(payload)
+    prefetchNeighbors(category, payload.hasMore)
+  }
+
+  function paint(payload) {
     const { sessions, summary } = payload
     el.summary.innerHTML =
       statTile('Sessions', summary.totalSessions) +
@@ -234,6 +271,10 @@ export function initRecords({ onBack }) {
       remove.disabled = true
       try {
         await api.deleteAdaptiveSession(session.id)
+        // Every cached page's counts and row membership are stale the instant
+        // this session leaves the table -- same reasoning as browse.js's own
+        // remove button clearing its page cache.
+        pageCache.clear()
         await load()
       } catch (error) {
         remove.disabled = false
@@ -270,6 +311,12 @@ export function initRecords({ onBack }) {
   }
 
   return function openRecords() {
+    // A session saved elsewhere (Adaptive Learning's "Save & Quit") since the
+    // last visit would be missing from a list served out of this cache --
+    // same reasoning as browse.js's `showBrowse` clearing its own page cache
+    // on every fresh open. Paging back and forth *within* this visit still
+    // comes from the cache; only a fresh open pays for a real fetch again.
+    pageCache.clear()
     page = 1
     load()
   }

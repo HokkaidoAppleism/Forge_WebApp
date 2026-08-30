@@ -16,12 +16,20 @@ directly and never will**; the desktop backend forwards as the signed-in
 user, same as everywhere else in `cloud.py`.
 
 **Runs at most once per account.** Guarded by a `user_settings` row
-(`key='local_data_imported'`), checked first and set last, so a re-launch of
-the desktop app or a repeated click of the import button is a no-op rather
-than a second copy of every row. There is no dual-write period to reconcile
-here (the desktop fully cut over, it did not keep writing locally after the
-switch), so there is nothing to de-duplicate *within* one run -- only across
-runs, which the flag handles.
+(`key='local_data_imported'`), *claimed* by inserting it before anything
+else runs rather than checked first and set last -- the old order read the
+flag, then wrote every table, then set the flag, which left the whole run
+racy: two imports for the same account close enough together (the same
+player signed into the same account on two old machines, each clicking
+Import within the same window) both read "not yet imported" before either
+had committed, and both proceeded, doubling every row. The insert's own
+`on conflict do nothing` unique constraint is what actually serializes this
+now -- a second request blocks on it until the first commits, then finds the
+row already there and bails, instead of two requests independently deciding
+the coast was clear. There is no dual-write period to reconcile here (the
+desktop fully cut over, it did not keep writing locally after the switch),
+so there is nothing to de-duplicate *within* one run -- only across runs,
+which the flag now genuinely handles.
 
 **A row naming a question this database does not have is dropped, not
 rejected.** The local and cloud question sets are known to differ by a
@@ -85,10 +93,19 @@ def import_local_backup():
     payload = request.get_json(silent=True) or {}
 
     with db.user_tx(g.user_id) as conn:
-        already = conn.execute(
-            "select 1 from public.user_settings "
-            "where user_id = %s and key = %s", (g.user_id, IMPORT_FLAG_KEY)).fetchone()
-        if already:
+        # Claimed by inserting the flag first, not checked-then-set-last -- see
+        # the module docstring. `on conflict do nothing` plus `returning` is
+        # what makes this atomic: a concurrent second request blocks on the
+        # same unique row until this transaction commits or rolls back, then
+        # sees it already there and gets nothing back, rather than reading a
+        # not-yet-committed "not imported" the same way this one just did.
+        claimed = conn.execute(
+            """insert into public.user_settings (user_id, key, value)
+               values (%s, %s, 'v1')
+               on conflict (user_id, key) do nothing
+               returning key""",
+            (g.user_id, IMPORT_FLAG_KEY)).fetchone()
+        if claimed is None:
             return jsonify({"alreadyImported": True, "imported": {}})
 
         user_id = g.user_id
@@ -277,11 +294,5 @@ def import_local_backup():
                  r.get("celerity_n") or 0))
             n += cur.rowcount
         counts["progress_daily"] = n
-
-        conn.execute(
-            """insert into public.user_settings (user_id, key, value)
-               values (%s, %s, 'v1')
-               on conflict (user_id, key) do update set value = excluded.value""",
-            (user_id, IMPORT_FLAG_KEY))
 
     return jsonify({"alreadyImported": False, "imported": counts})

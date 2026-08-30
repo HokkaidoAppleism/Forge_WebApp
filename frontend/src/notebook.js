@@ -70,6 +70,28 @@ export function initNotebook({ onBack, onNeedAiKey }) {
   let clues = []
   let cards = []
   let shelfRequest = 0
+
+  // Every shelf visited this notebook visit, keyed by category, so flicking
+  // hub -> shelf -> hub -> the same shelf again doesn't pay three fresh round
+  // trips for data that was on screen a moment ago -- the same complaint the
+  // Browse screen's page cache exists to fix (see browse.js's `pageCache`).
+  //
+  // Kept narrower than that one in one way: a shelf's own mutations (delete a
+  // clue, merge notes, add a card...) invalidate only *that* shelf's entry
+  // rather than clearing everything, since shelves don't share rows the way
+  // Browse's pages of the same query do. `invalidateShelf` is the one place
+  // that happens, called right before every mutation reloads.
+  //
+  // It does NOT get cleared just because the hub is opened again -- back-and-
+  // forth between the hub and a shelf is exactly the navigation this is meant
+  // to make instant. What it can't see is a clue saved from the *Reader*
+  // screen mid-tossup ("Save Highlight" in main.js) -- that writes into
+  // whichever shelf the question's category resolves to, server-side, without
+  // this module ever hearing about it. `resetShelfCache` (returned below) is
+  // the escape hatch main.js calls after that succeeds, since which shelf it
+  // landed in isn't known here.
+  const shelfCache = new Map()
+  function invalidateShelf() { shelfCache.delete(shelf) }
   let selected = new Set()
   // Ticked flashcards, for "Export selected". Kept separate from `selected`
   // (which is notes, and doubles as the merge selection) -- the two columns
@@ -119,6 +141,18 @@ export function initNotebook({ onBack, onNeedAiKey }) {
     show('detailScreen')
     el.detailTitle.textContent = category
     el.search.value = ''
+
+    const cached = shelfCache.get(category)
+    if (cached) {
+      notes = cached.notes
+      clues = cached.clues
+      cards = cached.cards
+      paintNotes()
+      paintClues()
+      paintCards()
+      return
+    }
+
     el.notesList.innerHTML = '<p class="text-text-muted">Loading…</p>'
     el.cluesList.innerHTML = ''
     el.cardsList.innerHTML = ''
@@ -136,6 +170,13 @@ export function initNotebook({ onBack, onNeedAiKey }) {
     notes = noteResult.status === 'fulfilled' ? noteResult.value.notes : []
     clues = clueResult.status === 'fulfilled' ? clueResult.value.clues : []
     cards = cardResult.status === 'fulfilled' ? cardResult.value.flashcards : []
+    // Only cached once every leg actually succeeded -- a partial failure (say,
+    // the clues request alone dropped) must not get remembered as "this shelf
+    // has no clues" for the rest of the visit.
+    if (noteResult.status === 'fulfilled' && clueResult.status === 'fulfilled' &&
+        cardResult.status === 'fulfilled') {
+      shelfCache.set(category, { notes, clues, cards })
+    }
 
     paintNotes()
     paintClues()
@@ -295,6 +336,7 @@ export function initNotebook({ onBack, onNeedAiKey }) {
     try {
       await api.generateGuide(shelf)
       el.generateGuideStatus.classList.add('hidden')
+      invalidateShelf()
       await openShelf(shelf)
     } catch (error) {
       // ApiError.empty on a 404 with no clues -- an instruction, not a
@@ -431,6 +473,7 @@ export function initNotebook({ onBack, onNeedAiKey }) {
       }
       closeModal(el.nameModal)
       selected.clear()
+      invalidateShelf()
       await openShelf(shelf)
     } catch (error) {
       el.nameError.textContent = error.message
@@ -475,6 +518,7 @@ export function initNotebook({ onBack, onNeedAiKey }) {
       try {
         await api.deleteClue(id)
         clues = clues.filter((c) => c.id !== id)
+        invalidateShelf()
         paintClues()
         applySearch()
       } catch (error) { failedRowAction(clueBtn, error, label) }
@@ -492,6 +536,7 @@ export function initNotebook({ onBack, onNeedAiKey }) {
         // Dropping it from the pick set too: exporting "selected" must not
         // carry an id that no longer exists.
         pickedCards.delete(id)
+        invalidateShelf()
         paintCards()
         applySearch()
       } catch (error) { failedRowAction(cardBtn, error, label) }
@@ -540,6 +585,7 @@ export function initNotebook({ onBack, onNeedAiKey }) {
       el.viewerContent.innerHTML = renderMarkdown(content)
       setEditing(false)
       el.viewerStatus.textContent = 'Saved.'
+      invalidateShelf()
       paintNotes()
     } catch (error) {
       el.viewerStatus.textContent = error.message
@@ -561,6 +607,7 @@ export function initNotebook({ onBack, onNeedAiKey }) {
       await api.deleteNote(openNote.id)
       notes = notes.filter((n) => n.id !== openNote.id)
       selected.delete(openNote.id)
+      invalidateShelf()
       closeModal(el.viewer)
       paintNotes()
     } catch (error) {
@@ -583,6 +630,7 @@ export function initNotebook({ onBack, onNeedAiKey }) {
       button.disabled = true
       try {
         await run()
+        invalidateShelf()
         await openShelf(shelf)
       } finally {
         button.disabled = false
@@ -608,6 +656,7 @@ export function initNotebook({ onBack, onNeedAiKey }) {
         category: shelf,
         flashcards: [{ term: term.trim(), definition: definition.trim() }],
       })
+      invalidateShelf()
       await openShelf(shelf)
     } catch (error) {
       window.alert(error.message)
@@ -655,5 +704,9 @@ export function initNotebook({ onBack, onNeedAiKey }) {
     })
   }
 
-  return { openHub }
+  // For main.js's own "Save Highlight" button on the Reader screen: that
+  // writes a clue into whichever shelf the question resolves to, server-side,
+  // without this module ever being told which one. Clearing everything is the
+  // one dependable fix -- see the `shelfCache` comment above.
+  return { openHub, resetShelfCache: () => shelfCache.clear() }
 }
