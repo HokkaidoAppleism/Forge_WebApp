@@ -43,6 +43,16 @@ def next_question():
     When nothing is due the queue falls through to whatever is scheduled
     soonest rather than declaring an empty session -- "No questions to review"
     over a list of forty visible questions reads as a bug.
+
+    Ties are broken by `last_seen`, least recently seen first, and then by id
+    so the order is total. Without that tiebreak the sort could not separate
+    rows sharing a due date -- and every row added before SM-2 has no due date
+    at all, so they all tie. One account currently has twenty rows tied for
+    first. The planner is free to return any of them and in practice returns
+    the same one every time, so the queue served one arbitrary question over
+    and over while nineteen equally due questions sat behind it. The
+    `last_seen` write below was added to stop exactly that and could not,
+    because nothing ordered by the column it was writing.
     """
     categories = _categories()
     params = [g.user_id]
@@ -62,7 +72,8 @@ def next_question():
                  where rq.user_id = %s
                    and rq.learned_at is null
                    {category_clause}
-              order by is_due desc, rq.sm2_due asc nulls first
+              order by is_due desc, rq.sm2_due asc nulls first,
+                       rq.last_seen asc nulls first, rq.question_id
                  limit 1""",
             params).fetchone()
 
