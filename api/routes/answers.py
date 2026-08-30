@@ -531,6 +531,15 @@ def _apply_to_review_queue(conn, user_id, question_id, outcome,
     counts = was_correct and (celerity is None or celerity >= min_celerity)
     streak = (row["correct_streak"] or 0) + 1 if counts else 0
     learned = streak >= learned_after
+    # Missing a Learned question clears the mark and brings it back, which is
+    # the documented behaviour (CHANGES.md, "Review Missed") and was not
+    # implemented: learned_at was only ever set, never cleared, so a question
+    # marked Learned stayed Learned however often it was missed afterwards --
+    # and /review/next filters on `learned_at is null`, so it could never be
+    # served again. Only a genuine miss clears it. A correct answer that came
+    # too late to count resets the streak but is not a miss, so it leaves the
+    # mark alone.
+    unlearned = not was_correct
 
     reps, ef, interval = scoring.sm2_update(
         scoring.sm2_grade(was_correct, celerity, guess),
@@ -548,11 +557,14 @@ def _apply_to_review_queue(conn, user_id, question_id, outcome,
                   sm2_ef         = %s,
                   sm2_interval   = %s,
                   sm2_due        = now() + make_interval(days => %s),
-                  learned_at     = case when %s then now() else learned_at end
+                  learned_at     = case when %s then now()
+                                        when %s then null
+                                        else learned_at end
             where user_id = %s and question_id = %s""",
         ((row["attempts"] or 0) + 1, streak,
          (row["total_correct"] or 0) + (1 if was_correct else 0),
-         reps, ef, interval, interval, learned, user_id, question_id))
+         reps, ef, interval, interval, learned, unlearned,
+         user_id, question_id))
 
     return {"rescheduled": True, "graded": True, "streak": streak,
             "learned": learned, "nextInDays": interval}
