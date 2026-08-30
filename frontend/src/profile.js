@@ -1272,6 +1272,8 @@ export function initProfile(el) {
   // Chart if you'd been reading the Table.
   let progressView = 'chart'
   let progressData = null
+  let panelRequest = 0
+  let progressRequest = 0
 
   const visiblePanels = () =>
     session ? PANELS.filter((p) => p.perSession) : PANELS
@@ -1301,11 +1303,15 @@ export function initProfile(el) {
     el.statAboutWhat.textContent = panel.what
     el.statAboutFinding.textContent = ''
     el.statSubPicker.innerHTML = ''
+    const requestId = ++panelRequest
     try {
       if (panel.views) {
         const datasets = await Promise.all(panel.views.map((v) =>
           cache.get(`${panel.key}|${v.key}|${category}|${session?.sessionId ?? ''}`,
                     () => v.load(category, session?.sessionId))))
+        // Switching panels again before this one's fetches land must not
+        // paint its stats underneath the now-highlighted panel button.
+        if (requestId !== panelRequest) return
         if (!activeViewKey || !panel.views.some((v) => v.key === activeViewKey)) {
           activeViewKey = panel.views[0].key
         }
@@ -1325,6 +1331,7 @@ export function initProfile(el) {
         const data = await cache.get(
           `${panel.key}||${category}|${session?.sessionId ?? ''}`,
           () => panel.load(category, session?.sessionId))
+        if (requestId !== panelRequest) return
         el.statView.textContent = ''
         el.statView.append(panel.draw(data))
         el.statAboutFinding.textContent = panel.finding(data)
@@ -1338,8 +1345,10 @@ export function initProfile(el) {
     const category = el.profileCategoryFilter.value
     el.progressChartView.textContent = 'Loading…'
     el.progressTableView.textContent = ''
+    const requestId = ++progressRequest
     try {
       const data = await api.progress(category, month)
+      if (requestId !== progressRequest) return
       progressData = data
       renderProgressViews()
       renderMonthNav(data)
@@ -1555,6 +1564,7 @@ export function initSessionPanels(el) {
   let current = panels[0].key
   let activeViewKey = null
   let sessionId = null
+  let panelRequest = 0
 
   function pickerButtons() {
     el.statPicker.innerHTML = ''
@@ -1580,10 +1590,14 @@ export function initSessionPanels(el) {
     el.statAboutWhat.textContent = panel.what
     el.statAboutFinding.textContent = ''
     el.statSubPicker.innerHTML = ''
+    const requestId = ++panelRequest
     try {
       if (panel.views) {
         const datasets = await Promise.all(panel.views.map((v) =>
           cache.get(`${panel.key}|${v.key}|${sessionId}`, () => v.load('', sessionId))))
+        // A quick second click -- another panel, or another sitting entirely
+        // -- must not paint this stale fetch over what is on screen now.
+        if (requestId !== panelRequest) return
         if (!activeViewKey || !panel.views.some((v) => v.key === activeViewKey)) {
           activeViewKey = panel.views[0].key
         }
@@ -1602,6 +1616,7 @@ export function initSessionPanels(el) {
       } else {
         const data = await cache.get(`${panel.key}||${sessionId}`,
                                      () => panel.load('', sessionId))
+        if (requestId !== panelRequest) return
         el.statView.textContent = ''
         el.statView.append(panel.draw(data))
         el.statAboutFinding.textContent = panel.finding(data)

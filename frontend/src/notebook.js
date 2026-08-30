@@ -69,6 +69,7 @@ export function initNotebook({ onBack, onNeedAiKey }) {
   let notes = []
   let clues = []
   let cards = []
+  let shelfRequest = 0
   let selected = new Set()
   // Ticked flashcards, for "Export selected". Kept separate from `selected`
   // (which is notes, and doubles as the merge selection) -- the two columns
@@ -125,9 +126,13 @@ export function initNotebook({ onBack, onNeedAiKey }) {
     // Three requests in parallel rather than in sequence: they do not depend on
     // each other, and awaiting them one at a time is three round trips of
     // latency for no reason.
+    const requestId = ++shelfRequest
     const [noteResult, clueResult, cardResult] = await Promise.allSettled([
       api.notes(category), api.clues(category), api.flashcards(category),
     ])
+    // A quick second shelf click before this one lands must not paint the
+    // stale shelf's data over the new one's title.
+    if (requestId !== shelfRequest) return
     notes = noteResult.status === 'fulfilled' ? noteResult.value.notes : []
     clues = clueResult.status === 'fulfilled' ? clueResult.value.clues : []
     cards = cardResult.status === 'fulfilled' ? cardResult.value.flashcards : []

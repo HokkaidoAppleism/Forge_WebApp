@@ -254,9 +254,14 @@ def add():
         if exists is None:
             return jsonify({"error": "No question with that id."}), 404
 
+        # A question already in the queue as Learned needs its mark cleared,
+        # not a no-op -- "on conflict do nothing" left a re-add of a Learned
+        # question silently invisible to /review/next, which still filters
+        # on learned_at is null, while this endpoint kept claiming success.
         conn.execute(
             "insert into public.review_queue (user_id, question_id, source) "
-            "values (%s, %s, 'manual') on conflict do nothing",
+            "values (%s, %s, 'manual') "
+            "on conflict (user_id, question_id) do update set learned_at = null",
             (g.user_id, question_id))
 
     return jsonify({"added": True}), 201

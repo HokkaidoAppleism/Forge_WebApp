@@ -29,7 +29,7 @@ export function initReviewList({ onBack, onStartReviewing }) {
   }
 
   el.backBtn.addEventListener('click', onBack)
-  el.startBtn.addEventListener('click', onStartReviewing)
+  el.startBtn.addEventListener('click', () => onStartReviewing(el.categoryFilter.value))
 
   function updateStartLabel() {
     const category = el.categoryFilter.value

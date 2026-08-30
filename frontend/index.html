@@ -31,6 +31,11 @@
           <input id="password" type="password" placeholder="Password" required
                  autocomplete="current-password"
                  class="rounded-lg border border-[#584741] bg-[#1d1816] p-3 focus:border-[#efe0db] focus:outline-none" aria-label="Password" />
+          <label class="flex items-center gap-2 text-sm text-text-muted">
+            <input id="rememberMe" type="checkbox"
+                   class="h-4 w-4 rounded border-[#584741] bg-[#1d1816]" />
+            Keep me signed in on this device
+          </label>
           <div class="flex gap-2">
             <button id="signInBtn" type="submit" data-mode="signin"
                     class="flex-1 rounded-full bg-[#efe0db] px-4 py-2 font-bold text-[#1d1816] disabled:opacity-50">Sign in</button>

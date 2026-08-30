@@ -1,4 +1,4 @@
-import { supabase } from './supabase.js'
+import { supabase, setRememberMe } from './supabase.js'
 import { api, ApiError } from './api.js'
 import { initProfile } from './profile.js'
 import { initNotebook } from './notebook.js'
@@ -16,7 +16,7 @@ import * as voice from './voice.js'
 const $ = (id) => document.getElementById(id)
 const el = {
   authScreen: $('authScreen'), authForm: $('authForm'), authMessage: $('authMessage'),
-  email: $('email'), password: $('password'),
+  email: $('email'), password: $('password'), rememberMe: $('rememberMe'),
   signInBtn: $('signInBtn'), signUpBtn: $('signUpBtn'), forgotPasswordBtn: $('forgotPasswordBtn'),
   recoveryForm: $('recoveryForm'), recoveryPassword: $('recoveryPassword'),
   setNewPasswordBtn: $('setNewPasswordBtn'),
@@ -235,6 +235,7 @@ el.authForm.addEventListener('submit', async (event) => {
   authBusy(true, mode === 'signup' ? 'Creating your account...' : 'Signing in...')
 
   const credentials = { email: el.email.value.trim(), password: el.password.value }
+  setRememberMe(el.rememberMe.checked)
   try {
     const { error } = mode === 'signup'
       ? await supabase.auth.signUp(credentials)
@@ -427,7 +428,14 @@ el.recordsBtn.addEventListener('click', () => {
 const showBrowse = initBrowse()
 const showReviewList = initReviewList({
   onBack: openReader,
-  onStartReviewing: () => {
+  onStartReviewing: (category) => {
+    // The Missed Questions screen has its own category filter, separate
+    // from the reader's -- match the reader's picker to it before starting
+    // the review, or "Review History" would silently review Any Category.
+    const target = category && category !== 'all' ? category : ''
+    for (const option of el.categorySelect.options) {
+      option.selected = option.value === target
+    }
     openReader()
     el.reviewMissedBtn.click()
   },
