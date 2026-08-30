@@ -15,11 +15,13 @@ and in production behind a real WSGI server (`gunicorn 'app:create_app()'`),
 never with Flask's own, which is single-threaded and says so on startup.
 """
 
+import threading
 import traceback
 
 from flask import Flask, jsonify
 from flask_cors import CORS
 
+import adaptive
 import config
 import db
 from routes.adaptive import bp as adaptive_bp
@@ -99,7 +101,44 @@ def create_app():
         return jsonify({"error": "Something went wrong on our end."}), 500
 
     db.open_pool()
+    _warm_catalogue()
     return app
+
+
+def _warm_catalogue():
+    """Pay for Adaptive Learning's subject list at boot, not on a player's click.
+
+    `adaptive.category_groups` groups all ~185k question rows by
+    (category, subcategory), and no index covers that pair -- Postgres sorts the
+    whole table and spills to disk (measured: `external merge Disk: 6648kB`,
+    ~10s cold, ~2s warm). It is memoised per process, so only one request ever
+    pays it; the problem is *which* request. That request is whoever opens
+    Adaptive Learning first after a deploy or a container wake, and they spend
+    it looking at an empty subject picker.
+
+    Warming it here moves that cost to boot, where it overlaps with signing in
+    and loading the reader instead of landing on a click. `category_groups`
+    calls `cluster_counts` itself, so this fills both memos.
+
+    On a daemon thread rather than inline: the Procfile allows a worker 30
+    seconds to boot, and blocking that long on a query whose connection the
+    pool may not have established yet is how a slow database turns a boot into
+    a crash loop. A failure here is logged and dropped -- the request path
+    still computes the catalogue on demand exactly as it did before, so the
+    worst case is the old behaviour rather than a broken endpoint.
+
+    The real fix is an index on (category, subcategory); see
+    supabase/migrations/0009_category_subcategory.sql. This stays useful after
+    it lands, because a cold first query is still slower than no query.
+    """
+    def warm():
+        try:
+            with db.content_tx() as conn:
+                adaptive.category_groups(conn)
+        except Exception:
+            traceback.print_exc()
+
+    threading.Thread(target=warm, name="warm-catalogue", daemon=True).start()
 
 
 # A plain module-level WSGI object, not just the factory above -- gunicorn's

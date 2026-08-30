@@ -1,0 +1,32 @@
+-- Adaptive Learning's subject picker was taking seconds to appear.
+--
+-- `adaptive.category_groups` builds the picker with
+--
+--     select category, subcategory, count(*)
+--       from public.questions
+--      where category is not null and subcategory is not null
+--   group by category, subcategory having count(*) >= 50
+--
+-- and nothing indexes that pair. The existing indexes lead with one column or
+-- the other and trail `rand_key` -- `(category, rand_key)` and
+-- `(subcategory, rand_key)` -- which serve the reader's random pick but not a
+-- grouping on both. So the planner sorts the whole table:
+--
+--   GroupAggregate  (actual time=2156..2252 rows=35)
+--     Group Key: category, subcategory
+--     ->  Sort  (actual time=2155..2221 rows=185257)
+--           Sort Method: external merge  Disk: 6648kB
+--
+-- 185k rows sorted and spilled to disk on every cold process: ~10s the first
+-- time, ~2s with the cache warm. Its companion `cluster_counts` is already
+-- fast (~0.07s) precisely because `questions_rec_idx` happens to lead with
+-- `subcategory, cluster_label` and can answer it index-only. This gives
+-- `category_groups` the same footing.
+--
+-- `cluster_label` trails the pair so the index also covers the distinct-count
+-- both callers want, making the whole catalogue an index-only scan with no
+-- sort node at all. It is a read-only summary of a table only the export
+-- script writes to, so the extra write cost is paid once per bank refresh.
+
+create index if not exists questions_category_subcategory_idx
+    on public.questions (category, subcategory, cluster_label);

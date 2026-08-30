@@ -588,7 +588,12 @@ function applyYearBounds(bounds) {
     return
   }
   yearBounds = bounds
+  // `null` is stored deliberately for a handle left at the end of the span
+  // (see savePrefs) and means "open" -- it has to be caught before the range
+  // check, because Number(null) is 0, which is finite, and would clamp to the
+  // wrong end of the span rather than falling back.
   const clamp = (v, fb) => {
+    if (v == null) return fb
     const n = Number(v)
     return Number.isFinite(n) ? Math.min(bounds.max, Math.max(bounds.min, n)) : fb
   }
@@ -2025,11 +2030,17 @@ function savePrefs() {
     categories: chosen(el.categorySelect),
     subcategories: chosen(el.subcategorySelect),
     difficulties: chosen(el.difficultySelect),
-    // Stored even when they sit at the full span, so a later run whose bank
-    // has grown still gets the player's own choice back rather than the new
-    // wider default.
-    yearMin: Number(el.yearMin.value) || undefined,
-    yearMax: Number(el.yearMax.value) || undefined,
+    // A handle parked on the end of the span is stored as null -- "open" --
+    // not as the year it happens to be sitting on. The two are the same today
+    // and diverge the moment the bank grows: storing 2025 because 2025 was the
+    // newest year on screen means a player who never touched the slider is
+    // silently filtered to `yearMax=2025` forever after, never sees a 2026
+    // question, and has nothing on screen to say why. A genuinely narrowed
+    // end is still a choice and still persists.
+    yearMin: yearBounds && Number(el.yearMin.value) <= yearBounds.min
+      ? null : Number(el.yearMin.value),
+    yearMax: yearBounds && Number(el.yearMax.value) >= yearBounds.max
+      ? null : Number(el.yearMax.value),
   }))
 }
 
