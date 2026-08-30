@@ -1255,6 +1255,42 @@ function makePanelCache() {
   }
 }
 
+/** Warm the cache for every panel other than the one just rendered, so the
+ *  first click on each of the rest of the picker is answered from memory
+ *  instead of paying its own Railway -> Supabase round trip -- today only the
+ *  panel actually clicked gets fetched, so a reader working through Buzz
+ *  Points, then Ceiling, then Neg Autopsy pays three fresh fetches for a page
+ *  that had every one of those numbers within reach the moment it opened.
+ *
+ *  Sequential, not `Promise.all`: these are real hosted-database queries, and
+ *  firing every remaining panel's queries at once just because the page
+ *  loaded is the kind of thing that's free against a local Postgres and not
+ *  against Railway. One at a time keeps this from ever being the biggest
+ *  thing hitting the API at once.
+ *
+ *  Fire-and-forget, same contract as browse.js's `prefetchNeighbors`: a slow
+ *  or failed prefetch just leaves that panel uncached, same as before this
+ *  existed, and a real click on it pays the round trip itself as always.
+ *
+ *  `keyFor`/`loadFor` take a panel (and, for a multi-view one, its view) and
+ *  build the same cache key and fetcher `loadPanel` itself would -- so this
+ *  has to be handed the *same* two functions the caller's own cache.get calls
+ *  use, or a prefetch here would warm a key a real click never asks for. */
+async function primeOtherPanels(panels, current, cache, keyFor, loadFor) {
+  for (const panel of panels) {
+    if (panel.key === current) continue
+    try {
+      if (panel.views) {
+        for (const v of panel.views) {
+          await cache.get(keyFor(panel, v), () => loadFor(panel, v))
+        }
+      } else {
+        await cache.get(keyFor(panel), () => loadFor(panel))
+      }
+    } catch { /* leave it uncached -- see the note above */ }
+  }
+}
+
 export function initProfile(el) {
   const cache = makePanelCache()
   let current = PANELS[0].key
@@ -1338,7 +1374,15 @@ export function initProfile(el) {
       }
     } catch (error) {
       el.statView.textContent = error.message
+      return
     }
+    // Not awaited: the panel actually asked for is already on screen, and the
+    // rest of the picker is a "might click it later" bet, not something this
+    // render should wait on.
+    primeOtherPanels(visiblePanels(), current, cache,
+      (p, v) => v ? `${p.key}|${v.key}|${category}|${session?.sessionId ?? ''}`
+                   : `${p.key}||${category}|${session?.sessionId ?? ''}`,
+      (p, v) => (v ?? p).load(category, session?.sessionId))
   }
 
   async function loadProgress() {
@@ -1623,7 +1667,12 @@ export function initSessionPanels(el) {
       }
     } catch (error) {
       el.statView.textContent = error.message
+      return
     }
+    // Not awaited -- see the profile picker's own copy of this call above.
+    primeOtherPanels(panels, current, cache,
+      (p, v) => v ? `${p.key}|${v.key}|${sessionId}` : `${p.key}||${sessionId}`,
+      (p, v) => (v ?? p).load('', sessionId))
   }
 
   return function showSessionPanels(newSessionId) {

@@ -425,7 +425,7 @@ el.recordsBtn.addEventListener('click', () => {
   showRecords()
 })
 
-const showBrowse = initBrowse()
+const showBrowse = initBrowse(() => filters)
 const showReviewList = initReviewList({
   onBack: openReader,
   onStartReviewing: (category) => {
@@ -891,6 +891,14 @@ function speakCurrentTossup(startIndex = 0) {
 
   voice.speak(words, startIndex, voice.speechRateFor(el.readingSpeed.value), {
     onWord: (idx) => {
+      // A late-but-real boundary event can land after onFallback already
+      // started the ticker below (the engine was merely slow to fire its
+      // first one, not actually unsupported) -- without this, both the
+      // ticker's setTimeout chain and this callback would go on writing
+      // wordIndex independently, racing each other and corrupting the buzz
+      // position celerity is computed from. Only one driver of wordIndex may
+      // ever run at a time.
+      stopTicker()
       wordIndex = idx
       voiceEstimating = false
       // `onboundary` fires as a word *starts*; wordIndex counts words already
@@ -1736,6 +1744,11 @@ el.saveHighlightBtn.addEventListener('click', async () => {
     await api.saveClue({ clueText, sourceQuestionId: question.id })
     el.saveHighlightBtn.textContent = 'Saved'
     toast('Clue saved to your notebook')
+    // Which shelf this landed on is worked out server-side (see the comment
+    // above), so this module can't invalidate just that one -- clear the
+    // notebook's whole shelf cache rather than let a shelf visited later this
+    // session serve a clue count from before this save.
+    notebook.resetShelfCache()
   } catch (error) {
     // Same as Add to Missed above: give the control back and put the message
     // where a sentence fits. `selectionchange` would eventually reset this,
