@@ -264,6 +264,32 @@ export function initNotebook({ onBack, onNeedAiKey }) {
       </div>`).join('')
   }
 
+  /** One group's worth of card rows -- the same checkbox/term/definition/
+   *  delete a flat list always had, just no longer repeating "from <answer>"
+   *  on every row now that the group heading already says it. */
+  function cardRow(c) {
+    return `
+      <div class="flex items-start justify-between gap-3 rounded-lg bg-tertiary-dark p-3">
+        <div class="flex flex-1 items-start gap-2">
+          <input type="checkbox" data-card-pick="${c.id}"
+                 class="mt-1 h-4 w-4 shrink-0 accent-sky-500"
+                 ${pickedCards.has(c.id) ? 'checked' : ''}>
+          <div class="min-w-0 flex-1">
+            <p class="font-bold">${escapeHtml(c.term)}</p>
+            <p class="mt-1 text-sm text-text-muted">${escapeHtml(c.definition)}</p>
+          </div>
+        </div>
+        <button data-delete-card="${c.id}"
+                class="shrink-0 text-xs text-red-400 hover:text-red-300"
+                title="Delete this card">✕</button>
+      </div>`
+  }
+
+  // Condensed under one answerline per tossup, collapsed until clicked --
+  // matching the desktop's own flashcard view (electron-app/renderer.js's
+  // displayCategoryDetail). A shelf built from Adaptive Learning runs ten
+  // cards deep per tossup, and a flat list repeating the same "from <answer>"
+  // under every one of them was the thing this replaces.
   function paintCards() {
     el.cardCount.textContent = cards.length ? `(${cards.length})` : ''
     el.deleteAllFlashcardsBtn.classList.toggle('hidden', cards.length === 0)
@@ -275,27 +301,40 @@ export function initNotebook({ onBack, onNeedAiKey }) {
       return
     }
 
-    // Each card carries a checkbox for the same reason per-question notes do:
-    // "export the whole shelf" is the common case, but a shelf is often
-    // hundreds of cards and Anki decks are built from a subset of them.
-    el.cardsList.innerHTML = cards.map((c) => `
-      <div data-card-row class="rounded-lg bg-secondary-dark p-4">
-        <div class="flex items-start justify-between gap-3">
-          <div class="flex flex-1 items-start gap-2">
-            <input type="checkbox" data-card-pick="${c.id}"
-                   class="mt-1 h-4 w-4 shrink-0 accent-sky-500"
-                   ${pickedCards.has(c.id) ? 'checked' : ''}>
-            <p class="font-bold">${escapeHtml(c.term)}</p>
-          </div>
-          <button data-delete-card="${c.id}"
-                  class="shrink-0 text-xs text-red-400 hover:text-red-300"
-                  title="Delete this card">✕</button>
+    // Grouped by the tossup a card came from, not by answer text -- two
+    // different questions can share an answerline, and grouping on the id
+    // keeps them apart the way grouping on the string would not. A card with
+    // no recorded source (older data, or a manually added one) falls into one
+    // shared "Other cards" bucket rather than getting a group of its own per
+    // card.
+    const groups = new Map()
+    for (const c of cards) {
+      const key = c.source_question_id ?? 'other'
+      if (!groups.has(key)) {
+        groups.set(key, { answer: c.source_answer, difficulty: c.source_difficulty, cards: [] })
+      }
+      groups.get(key).cards.push(c)
+    }
+
+    el.cardsList.innerHTML = [...groups.entries()].map(([key, group]) => `
+      <details data-card-row class="rounded-lg bg-secondary-dark">
+        <summary class="flex cursor-pointer select-none items-center justify-between gap-3 rounded-lg px-4 py-3 hover:bg-tertiary-dark">
+          <span class="flex min-w-0 items-center gap-2">
+            <span class="truncate font-bold text-[#f6b17a]">${escapeHtml(group.answer || 'Other cards')}</span>
+            ${group.difficulty != null
+              ? `<span class="shrink-0 rounded-full bg-tertiary-dark px-2 py-0.5 text-xs font-bold text-text-muted"
+                       title="Difficulty of the tossup these cards came from">difficulty ${group.difficulty}</span>` : ''}
+          </span>
+          <span class="flex shrink-0 items-center gap-3 text-xs text-text-muted">
+            <span>${group.cards.length} card${group.cards.length === 1 ? '' : 's'}</span>
+            <button data-select-group="${key}" class="text-accent-dark hover:underline"
+                    title="Select or clear every card from this tossup">Select</button>
+          </span>
+        </summary>
+        <div class="space-y-2 px-4 pb-4">
+          ${group.cards.map(cardRow).join('')}
         </div>
-        <p class="mt-1 text-sm text-text-muted">${escapeHtml(c.definition)}</p>
-        ${c.source_answer
-          ? `<p class="mt-2 text-xs text-text-muted">from
-             <span class="text-[#f6b17a]">${escapeHtml(c.source_answer)}</span></p>` : ''}
-      </div>`).join('')
+      </details>`).join('')
 
     paintCardPickBar()
   }
@@ -509,6 +548,24 @@ export function initNotebook({ onBack, onNeedAiKey }) {
   el.detailScreen.addEventListener('click', async (event) => {
     const openBtn = event.target.closest('[data-open-note]')
     if (openBtn) return showNote(Number(openBtn.dataset.openNote))
+
+    const selectGroupBtn = event.target.closest('[data-select-group]')
+    if (selectGroupBtn) {
+      // Sits inside a <summary>, which toggles the group open/closed on any
+      // click within it -- without this, picking a group would also fold it.
+      event.preventDefault()
+      const boxes = selectGroupBtn.closest('details')
+        .querySelectorAll('input[data-card-pick]')
+      const allChecked = boxes.length > 0 && [...boxes].every((b) => b.checked)
+      for (const box of boxes) {
+        box.checked = !allChecked
+        const id = Number(box.dataset.cardPick)
+        if (box.checked) pickedCards.add(id)
+        else pickedCards.delete(id)
+      }
+      paintCardPickBar()
+      return
+    }
 
     const clueBtn = event.target.closest('[data-delete-clue]')
     if (clueBtn) {
