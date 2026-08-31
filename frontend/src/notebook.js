@@ -187,9 +187,15 @@ export function initNotebook({ onBack, onNeedAiKey }) {
     return note.title || note.answer_text || 'Untitled'
   }
 
+  // Case-insensitive, locale-aware -- plain `<` would sort "Zeus" before
+  // "abraham lincoln", which is not what anyone reading an alphabetical list
+  // of answerlines expects.
+  const byTitle = (a, b) =>
+    noteTitle(a).localeCompare(noteTitle(b), undefined, { sensitivity: 'base' })
+
   function paintNotes() {
-    const guides = notes.filter((n) => n.is_merged)
-    const singles = notes.filter((n) => !n.is_merged)
+    const guides = notes.filter((n) => n.is_merged).sort(byTitle)
+    const singles = notes.filter((n) => !n.is_merged).sort(byTitle)
 
     el.guidesSection.classList.toggle('hidden', guides.length === 0)
     el.notesSection.classList.toggle('hidden', singles.length === 0)
@@ -316,7 +322,14 @@ export function initNotebook({ onBack, onNeedAiKey }) {
       groups.get(key).cards.push(c)
     }
 
-    el.cardsList.innerHTML = [...groups.entries()].map(([key, group]) => `
+    // Alphabetical by answerline, "Other cards" last -- it has no answer to
+    // sort by, and sorting the one bucket that isn't really a tossup in among
+    // ones that are would put it at an arbitrary point in the middle of the
+    // alphabet instead of clearly out of band.
+    const sortedGroups = [...groups.entries()].sort(([, a], [, b]) =>
+      (a.answer ?? '￿').localeCompare(b.answer ?? '￿', undefined, { sensitivity: 'base' }))
+
+    el.cardsList.innerHTML = sortedGroups.map(([key, group]) => `
       <details data-card-row class="rounded-lg bg-secondary-dark">
         <summary class="flex cursor-pointer select-none items-center justify-between gap-3 rounded-lg px-4 py-3 hover:bg-tertiary-dark">
           <span class="flex min-w-0 items-center gap-2">
