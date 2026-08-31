@@ -307,9 +307,16 @@
           <section class="mt-6 rounded-xl border border-[#584741] p-4">
             <h3 class="mb-3 flex items-center justify-between text-lg font-bold">
               AI Explanation
-              <!-- Starts disabled: enabled once a tossup is loaded, reset by
-                   abandonTossup() in main.js. -->
-              <button id="getExplanationBtn" disabled class="rounded-full bg-sky-600 px-3 py-1 text-sm font-bold disabled:cursor-not-allowed disabled:opacity-40" title="Keyboard shortcut: E">Get Explanation</button>
+              <span class="flex items-center gap-2">
+                <!-- Hidden until an explanation actually renders (nothing to
+                     save before then), and again once this tossup ends --
+                     matches the desktop's own Save Note, next to Get
+                     Explanation. -->
+                <button id="saveExplanationBtn" class="hidden rounded-full bg-green-600 px-3 py-1 text-sm font-bold hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-60" title="Save this explanation as a note on this question">Save Note</button>
+                <!-- Starts disabled: enabled once a tossup is loaded, reset by
+                     abandonTossup() in main.js. -->
+                <button id="getExplanationBtn" disabled class="rounded-full bg-sky-600 px-3 py-1 text-sm font-bold disabled:cursor-not-allowed disabled:opacity-40" title="Keyboard shortcut: E">Get Explanation</button>
+              </span>
             </h3>
             <div id="explanationContainer" class="guide show-title text-sm text-text-muted">
               Click &ldquo;Get Explanation&rdquo; to see an AI-generated explanation of the question.

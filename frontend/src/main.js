@@ -92,6 +92,7 @@ const el = {
   submitAnswerBtn: $('submitAnswerBtn'), answerFeedback: $('answerFeedback'),
   addToMissedBtn: $('addToMissedBtn'),
   getExplanationBtn: $('getExplanationBtn'), explanationContainer: $('explanationContainer'),
+  saveExplanationBtn: $('saveExplanationBtn'),
   sentenceExplanationContainer: $('sentenceExplanationContainer'),
   createFlashcardBtn: $('createFlashcardBtn'), draftFlashcardsContainer: $('draftFlashcardsContainer'),
   saveAllDraftFlashcardsBtn: $('saveAllDraftFlashcardsBtn'),
@@ -113,6 +114,11 @@ let wordIndex = 0       // how many words have been shown
 let powerIdx = -1       // index of the word holding the (*), or -1
 let ticker = null       // the setTimeout chain driving the read
 let question = null     // the row currently on screen
+// The last AI explanation actually fetched, in raw markdown -- what
+// saveExplanationBtn saves. Not the rendered HTML in el.explanationContainer:
+// the note is meant to be read again later, in the notebook's own markdown
+// renderer, not to carry this page's specific styling.
+let explanationText = ''
 // One id per tossup, sent as clientAnswerId so the exact same POST /api/answers
 // landing twice (a network retry, a second tab, finish()'s own guard failing
 // some day) can never write user_stats twice -- see the server-side note in
@@ -989,8 +995,16 @@ function abandonTossup() {
   el.questionMeta.textContent = ''
   el.reviewAheadNotice.classList.add('hidden')
   el.getExplanationBtn.disabled = true
+  el.getExplanationBtn.classList.remove('hidden')
   el.explanationContainer.textContent =
     'Click "Get Explanation" to see an AI-generated explanation of the question.'
+  // Nothing to save until a fresh explanation is fetched for whichever
+  // question comes next -- and the last one's text belongs to a question
+  // that's gone, same reason questionGeneration exists.
+  explanationText = ''
+  el.saveExplanationBtn.classList.add('hidden')
+  el.saveExplanationBtn.disabled = false
+  el.saveExplanationBtn.textContent = 'Save Note'
   // The per-clue panel is emptied as well as hidden. Left filled it would
   // flash the previous tossup's clue explanation for as long as it takes the
   // next one to be asked about, which is the same stale-content bug the
@@ -1531,6 +1545,8 @@ el.getExplanationBtn.addEventListener('click', async () => {
     // longer on screen -- drop it rather than painting it under the new one.
     if (asked !== questionGeneration) return
     el.explanationContainer.innerHTML = renderMarkdown(explanation)
+    explanationText = explanation
+    el.saveExplanationBtn.classList.remove('hidden')
   } catch (error) {
     if (asked !== questionGeneration) return
     if (error instanceof ApiError && error.payload?.code === 'no_key') {
@@ -1544,6 +1560,34 @@ el.getExplanationBtn.addEventListener('click', async () => {
       el.explanationContainer.textContent = error.message
     }
     el.getExplanationBtn.disabled = false
+  }
+})
+
+el.saveExplanationBtn.addEventListener('click', async () => {
+  if (!explanationText || !question) return
+
+  el.saveExplanationBtn.disabled = true
+  el.saveExplanationBtn.textContent = 'Saving…'
+  try {
+    // category and answerText are both left out, same as Save Highlight's
+    // api.saveClue call just above -- the reader is never told the answer to
+    // a tossup it hasn't scored yet (see the module note by
+    // getExplanationBtn's markup), so there is nothing honest to send. The
+    // server resolves both off sourceQuestionId itself; see
+    // routes/notebook.py's save_note.
+    await api.saveNote({ content: explanationText, sourceQuestionId: question.id })
+    toast('Explanation saved to your notebook')
+    // Matches the desktop's own Save Note: there is nothing left to fetch for
+    // this tossup once its explanation is in the notebook, so both buttons
+    // go rather than leaving a live Get Explanation that would just offer
+    // the identical text a second time.
+    el.saveExplanationBtn.textContent = 'Saved!'
+    el.getExplanationBtn.classList.add('hidden')
+    notebook.resetShelfCache()
+  } catch (error) {
+    el.saveExplanationBtn.disabled = false
+    el.saveExplanationBtn.textContent = 'Save Note'
+    toast(error.message)
   }
 })
 
