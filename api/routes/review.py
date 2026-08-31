@@ -27,6 +27,10 @@ from auth import require_user
 bp = Blueprint("review", __name__, url_prefix="/api/review")
 
 PAGE_SIZE = 25
+# The ceiling on `perPage` (see `queue`). 200 is a fetch the desktop's
+# whole-queue walk can finish in one or two round trips for any realistic
+# review list, while still bounding what one request can ask the database for.
+MAX_PAGE_SIZE = 200
 
 
 def _categories():
@@ -99,16 +103,35 @@ def next_question():
 @bp.get("/queue")
 @require_user
 def queue():
-    """One page of the review list, with each question's answer history."""
+    """One page of the review list, with each question's answer history.
+
+    `perPage` overrides the default page size, up to MAX_PAGE_SIZE. The web
+    frontend never sends it -- 25 is the size its paging control is built
+    around -- but the desktop backend has no paging control at all: it walks
+    the *whole* queue to build one summary (see merged_api.py's /reviewQueue),
+    and at 25 a player with 300 missed questions paid twelve sequential
+    round trips to the hosted API just to open the Missed Questions page.
+
+    Deliberately a cap rather than an unbounded size, and deliberately
+    optional: an older desktop build that doesn't send it still pages at 25
+    and still gets correct results, just more slowly, and a client asking for
+    a million rows gets MAX_PAGE_SIZE instead of a query that takes the
+    database down.
+    """
     try:
         page = max(1, int(request.args.get("page", 1)))
     except (TypeError, ValueError):
         page = 1
 
+    try:
+        per_page = min(MAX_PAGE_SIZE, max(1, int(request.args.get("perPage", PAGE_SIZE))))
+    except (TypeError, ValueError):
+        per_page = PAGE_SIZE
+
     status = request.args.get("status", "all")
     category = (request.args.get("category") or "").strip()
 
-    offset = (page - 1) * PAGE_SIZE
+    offset = (page - 1) * per_page
 
     with db.user_tx(g.user_id) as conn:
         # "Stuck" is not a column -- it is "missed this many times without
@@ -146,10 +169,10 @@ def queue():
               order by rq.added_at desc
                  limit %s offset %s""",
             [g.user_id] + status_params + category_params
-            + [PAGE_SIZE + 1, offset]).fetchall()
+            + [per_page + 1, offset]).fetchall()
 
-        has_more = len(rows) > PAGE_SIZE
-        rows = rows[:PAGE_SIZE]
+        has_more = len(rows) > per_page
+        rows = rows[:per_page]
 
         # The N+1 that would otherwise live here, collapsed into one query.
         histories = {}
@@ -186,7 +209,7 @@ def queue():
             0, (row["attempts"] or 0) - len(item["history"]))
         items.append(item)
 
-    return jsonify({"page": page, "pageSize": PAGE_SIZE,
+    return jsonify({"page": page, "pageSize": per_page,
                     "hasMore": has_more, "items": items})
 
 
