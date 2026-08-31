@@ -1118,11 +1118,16 @@ const PANELS = [
     key: 'buzzpoints', label: 'Where You Buzz', perSession: true,
     what: 'What a buzz is actually worth in each quarter of the tossup, in real points.',
     views: [
-      { key: 'value', label: 'Value', title: 'What a buzz in each quarter is worth',
+      // 'value' and 'table' both draw from the same api.buzzpoints() call --
+      // sharing cacheKey (rather than each view's own `key`, the default) is
+      // what makes that one fetch, not two: cache.get keys on this string,
+      // and Promise.all fires every view's loader at once, so without it two
+      // views wanting the same data raced two simultaneous fetches for it.
+      { key: 'value', cacheKey: 'buzzpoints', label: 'Value', title: 'What a buzz in each quarter is worth',
         load: (category, session) => api.buzzpoints(category, session), draw: drawBuzzpointsValue },
       { key: 'spread', label: 'Spread', title: 'How often you buzz at each point, and how those turned out',
         load: (category, session) => api.buzzSpread(category, session), draw: drawBuzzSpread },
-      { key: 'table', label: 'Table',
+      { key: 'table', cacheKey: 'buzzpoints', label: 'Table',
         load: (category, session) => api.buzzpoints(category, session), draw: drawBuzzpointsTable },
     ],
     finding: (d) => d.evaluation,
@@ -1131,9 +1136,9 @@ const PANELS = [
     key: 'ceiling', label: 'Ceiling', perSession: true,
     what: 'How well you convert at each difficulty, and the tournaments those difficulties are.',
     views: [
-      { key: 'chart', label: 'Chart',
+      { key: 'chart', cacheKey: 'ceiling', label: 'Chart',
         load: (category, session) => api.ceiling(category, session), draw: drawCeiling },
-      { key: 'table', label: 'Table',
+      { key: 'table', cacheKey: 'ceiling', label: 'Table',
         load: (category, session) => api.ceiling(category, session), draw: drawCeilingTable },
     ],
     finding: (d) => d.evaluation,
@@ -1142,9 +1147,9 @@ const PANELS = [
     key: 'negs', label: 'Neg Autopsy', perSession: true,
     what: 'Whether your negs track when you buzz or what you buzzed on — the two want opposite fixes.',
     views: [
-      { key: 'grid', label: 'Grid', title: 'Neg rate for each difficulty and buzz point',
+      { key: 'grid', cacheKey: 'negAutopsy', label: 'Grid', title: 'Neg rate for each difficulty and buzz point',
         load: (category, session) => api.negAutopsy(category, session), draw: drawNegAutopsyGrid },
-      { key: 'breakdown', label: 'Breakdown', title: 'Neg rate along each axis on its own',
+      { key: 'breakdown', cacheKey: 'negAutopsy', label: 'Breakdown', title: 'Neg rate along each axis on its own',
         load: (category, session) => api.negAutopsy(category, session), draw: drawNegAutopsyBreakdown },
     ],
     finding: (d) => d.evaluation,
@@ -1343,7 +1348,7 @@ export function initProfile(el) {
     try {
       if (panel.views) {
         const datasets = await Promise.all(panel.views.map((v) =>
-          cache.get(`${panel.key}|${v.key}|${category}|${session?.sessionId ?? ''}`,
+          cache.get(`${panel.key}|${v.cacheKey ?? v.key}|${category}|${session?.sessionId ?? ''}`,
                     () => v.load(category, session?.sessionId))))
         // Switching panels again before this one's fetches land must not
         // paint its stats underneath the now-highlighted panel button.
@@ -1638,7 +1643,7 @@ export function initSessionPanels(el) {
     try {
       if (panel.views) {
         const datasets = await Promise.all(panel.views.map((v) =>
-          cache.get(`${panel.key}|${v.key}|${sessionId}`, () => v.load('', sessionId))))
+          cache.get(`${panel.key}|${v.cacheKey ?? v.key}|${sessionId}`, () => v.load('', sessionId))))
         // A quick second click -- another panel, or another sitting entirely
         // -- must not paint this stale fetch over what is on screen now.
         if (requestId !== panelRequest) return
