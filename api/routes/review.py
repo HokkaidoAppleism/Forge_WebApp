@@ -57,6 +57,20 @@ def next_question():
     and over while nineteen equally due questions sat behind it. The
     `last_seen` write below was added to stop exactly that and could not,
     because nothing ordered by the column it was writing.
+
+    **The ORDER BY leads on `sm2_due`, not on `is_due`.** `is_due` is still
+    selected -- the reader reads it off the returned row (main.js checks
+    `question.is_due === false` to leave review mode when nothing is due) --
+    but it used to lead the sort too, and that column is a computed
+    expression Postgres cannot match to any index, so every call sorted the
+    user's *entire* unlearned queue from scratch to return one row. Ordering
+    by `sm2_due asc nulls first` alone produces the identical row order:
+    `is_due` is true exactly when `sm2_due is null or sm2_due <= now()`, and
+    ascending order already groups every value at or below a fixed threshold
+    ahead of every value above it, in the same relative order sorting by the
+    boolean first and the value second would give. Dropping the redundant key
+    lets `review_queue_due_idx` (widened to match, see migration 0010) answer
+    this with an index scan instead of a sort over the whole queue.
     """
     categories = _categories()
     params = [g.user_id]
@@ -76,7 +90,7 @@ def next_question():
                  where rq.user_id = %s
                    and rq.learned_at is null
                    {category_clause}
-              order by is_due desc, rq.sm2_due asc nulls first,
+              order by rq.sm2_due asc nulls first,
                        rq.last_seen asc nulls first, rq.question_id
                  limit 1""",
             params).fetchone()
