@@ -155,8 +155,30 @@ def end():
     if not key or not session_id:
         return jsonify({"error": "restoreKey and sessionId are required."}), 400
 
+    # The client's own record of this sitting's *starting* skill -- echoed
+    # back from the first /api/adaptive/question response's `adaptive.skill`
+    # (model.overall_skill() at that moment), captured once and never
+    # overwritten as later questions update it. Falls back to
+    # model.reported_skill for a client that predates this (or a session that
+    # somehow never got past that first question): the historical, previously
+    # wrong-but-only-option value, not a broken request.
+    #
+    # **Why not derive it here from category_user_state instead.** That row's
+    # own start_difficulty is deliberately frozen at the value from the very
+    # *first* session this category was ever played (save_state's upsert
+    # excludes it from the SET clause on purpose) -- it names where the
+    # player's skill in this subject began, once, not where any one sitting
+    # began. Using it here made every session's recorded start identical to
+    # every other session's, which is the bug this parameter exists to fix.
+    try:
+        start_skill = float(payload.get("startSkill"))
+    except (TypeError, ValueError):
+        start_skill = None
+
     with db.user_tx(g.user_id) as conn:
         model, served, _ = adaptive.load_state(conn, g.user_id, key)
+        if start_skill is None:
+            start_skill = model.reported_skill
 
         # Counted from the answers actually recorded for this session rather
         # than from a counter on the model. user_stats is the authority on what
@@ -180,13 +202,13 @@ def end():
                     started_at, ended_at)
                values (%s, %s, %s, %s, %s, %s, %s, %s, now())""",
             (g.user_id, session_id, key, totals["answered"], totals["correct"],
-             model.reported_skill, end_difficulty, payload.get("startedAt")))
+             start_skill, end_difficulty, payload.get("startedAt")))
 
     return jsonify({
         "saved": True,
         "questionsAnswered": totals["answered"],
         "correctAnswers": totals["correct"],
-        "startDifficulty": model.reported_skill,
+        "startDifficulty": start_skill,
         "endDifficulty": end_difficulty,
     })
 

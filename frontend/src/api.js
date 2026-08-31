@@ -156,9 +156,9 @@ export const api = {
   adaptiveQuestion: (categories, weights) =>
     call('/api/adaptive/question', { params: { category: categories, weight: weights } }),
 
-  adaptiveEnd: (restoreKey, sessionId, startedAt) =>
+  adaptiveEnd: (restoreKey, sessionId, startedAt, startSkill) =>
     call('/api/adaptive/end', {
-      method: 'POST', body: { restoreKey, sessionId, startedAt },
+      method: 'POST', body: { restoreKey, sessionId, startedAt, startSkill },
     }),
 
   // The records book. `category` filters the rows and the totals; the picker

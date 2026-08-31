@@ -1077,6 +1077,14 @@ async function loadQuestion(fetcher) {
     adaptive.restoreKey = question.adaptive.restoreKey
     adaptive.subject = question.adaptive.subcategory
     adaptive.skill = question.adaptive.skill
+    // Only the first question's skill counts as this sitting's starting
+    // point -- every question after this one updates adaptive.skill above,
+    // and Save & Quit needs the value from before any of that happened.
+    // category_user_state's own start_difficulty can't stand in for this: it
+    // is deliberately frozen at whatever it was the very first time this
+    // category was ever played, not this sitting's start (see
+    // routes/adaptive.py's /end).
+    if (adaptive.startSkill === null) adaptive.startSkill = question.adaptive.skill
     paintAdaptiveStats()
 
     // Said once, on the first question, when there was already a model to pick
@@ -1987,6 +1995,10 @@ el.startAdaptiveSessionBtn.addEventListener('click', () => {
     startedAt: new Date().toISOString(),
     answered: 0, correct: 0,
     restoreKey: null, skill: null, subject: null,
+    // Captured once, from the first question's `adaptive.skill` -- see the
+    // comment where it's set, and routes/adaptive.py's /end for why this
+    // can't just be re-derived server-side from category_user_state.
+    startSkill: null,
   }
   el.adaptiveSessionStats.classList.remove('hidden')
   paintAdaptiveStats()
@@ -2018,7 +2030,7 @@ el.saveAndQuitAdaptiveBtn.addEventListener('click', async () => {
     // and every answer, so closing the tab loses none of it. This only records
     // the session summary that the Records page lists.
     if (restoreKey) {
-      await api.adaptiveEnd(restoreKey, adaptive.sessionId, adaptive.startedAt)
+      await api.adaptiveEnd(restoreKey, adaptive.sessionId, adaptive.startedAt, adaptive.startSkill)
     }
   } catch (error) {
     // The save failed, so the sitting will not appear in Records. This used to
