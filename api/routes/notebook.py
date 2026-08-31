@@ -162,12 +162,6 @@ def save_note():
         return jsonify({"error": "sourceQuestionId must be a question id."}), 400
 
     answer_text = payload.get("answerText")
-    # The reader normally passes the answerline; when it does not, work it out
-    # now rather than leaving the note to be titled by its opening sentence.
-    if not str(answer_text or "").strip():
-        derived = notebook.derive_title_from_content(content)
-        answer_text = None if notebook.looks_like_intro_sentence(derived) else derived
-    answer_text = clean_answerline(answer_text) or None
 
     difficulty = payload.get("difficulty")
     if not isinstance(difficulty, int):
@@ -178,6 +172,25 @@ def save_note():
             conn, source_question_id, payload.get("category"))
         if not category:
             return jsonify({"error": "A category is required."}), 400
+
+        # The reader normally passes the answerline itself. When it doesn't --
+        # Get Explanation's Save Note is the one caller that never can, since
+        # the reader is never told a tossup's answer before it's scored (see
+        # main.js's own note by the button) -- the real answer is one query
+        # away off source_question_id, and reading it off the row it actually
+        # belongs to beats parsing it back out of AI-generated text formatted
+        # specifically to be parseable. Only falls through to that parse when
+        # there's no source question to ask at all.
+        if not str(answer_text or "").strip():
+            if source_question_id is not None:
+                q_row = conn.execute(
+                    "select answer from public.questions where id = %s",
+                    (source_question_id,)).fetchone()
+                answer_text = q_row["answer"] if q_row else None
+            if not str(answer_text or "").strip():
+                derived = notebook.derive_title_from_content(content)
+                answer_text = None if notebook.looks_like_intro_sentence(derived) else derived
+        answer_text = clean_answerline(answer_text) or None
 
         row = conn.execute(
             """insert into public.notebook_notes

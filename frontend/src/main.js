@@ -1091,7 +1091,9 @@ async function loadQuestion(fetcher) {
 
 
   el.submitAnswerBtn.disabled = false
-  el.getExplanationBtn.disabled = false
+  // getExplanationBtn is deliberately NOT re-enabled here -- see the comment
+  // where it's turned back on, in finish(). A fresh tossup starts with it
+  // disabled and stays that way until this one is actually over.
   el.createFlashcardBtn.disabled = false
   el.questionContainer.innerHTML = ''
 
@@ -1343,6 +1345,15 @@ async function finish({ didBuzz, guess }) {
 
     showResult(result)
     recordSessionAnswer(result)
+    // Not enabled when the question first loads any more -- an explanation
+    // necessarily names the answer (see geminiGetter.py's "explain" prompt),
+    // and unlocking it before the tossup is actually over meant it could be
+    // clicked mid-read, spoiling a question the player hadn't attempted yet.
+    // This is the one place a buzz-and-retry can't reach without landing
+    // here for real: a rebuzz returns above at `result.retry` and never gets
+    // this far, and a tossup nobody buzzed still reaches this same line
+    // through onTossupFullyRead's own call into finish().
+    el.getExplanationBtn.disabled = false
 
     if (adaptive && result.adaptive?.graded) {
       adaptive.answered += 1

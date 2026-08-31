@@ -121,11 +121,15 @@ class GeminiGetter:
         self._client_key = None
 
     instruction_dict = {
-        # The "start with the answerline, no preamble" rule matters downstream:
-        # notes are titled and filed by their first line, and a preamble like
-        # "Here's an explanation of the quizbowl question:" is both identical
-        # across every note and useless as a title.
-        "explain": "Explain the following quizbowl question in context of its answer. Begin your response with a single markdown heading containing only the answerline, like \"# Gaius Julius Caesar\". Do not write any preamble such as \"Here's an explanation\" - go straight from that heading into the clues. For each clue, briefly describe its relevance to the answer, name any referenced works, people, or concepts, and clarify connections. Use concise bullet points for each clue. If you cannot answer, respond with a short error message only.\n",
+        # No longer opens with the answerline as its own heading -- Get
+        # Explanation is available before a tossup is even buzzed on (the web
+        # port now gates the *button* on the tossup being over, but this
+        # prompt is shared with the desktop build and with the sentence-level
+        # explain path, and a giant "# Black Sea" is a spoiler in any of them
+        # if something ever calls this early). Titling a saved note no longer
+        # depends on this either -- routes/notebook.py's save_note reads the
+        # real answerline off source_question_id now, not off this text.
+        "explain": "Explain the following quizbowl question in context of its answer. Do not write any preamble such as \"Here's an explanation\" - go straight into the clues. For each clue, briefly describe its relevance to the answer, name any referenced works, people, or concepts, and clarify connections. Mention the answer naturally as part of the explanation rather than announcing it up front. Use concise bullet points for each clue. If you cannot answer, respond with a short error message only.\n",
         "card": "\nFrom the following quizbowl question, generate a JSON array of flashcard objects.\nEach object must have a \"term\" and a \"definition\" key.\nThe \"term\" should be a specific, important clue from the question.\nThe \"definition\" should be the answer to that clue.\nYour response MUST be a valid JSON array and nothing else. Do not include any explanatory text, markdown formatting like ```json, or any other characters before or after the array.\n\nExample of a valid response:\n[{\"term\": \"This author wrote 'The School for Wives'\", \"definition\": \"Molière\"}, {\"term\": \"This play features the character Arnolphe\", \"definition\": \"The School for Wives\"}]\n\nHere is the question:\n",
         "notes": "\nYou are a hybrid scholar and veteran quizbowl question writer. Your mission is to construct a dense, thematically consistent knowledge web based on a specific set of clues.\nYour output must be well-organized, comprehensive, and formatted using Markdown for clarity.\nThe goal is to create a structured, easy-to-review study guide that provides insights beyond simple definitions.\nHere are the clues:\n",
         "explain_sentence": "\nYou are an AI tutor. For the following quizbowl clue, provide a brief insight that a user would need to research beyond the tossup. I want you to provide this research for the user. Identify and name any works, authors, historical events, scientific concepts, people, or places referenced. Describe the context and significance in 1-2 sentences, focusing on what makes the clue important. Do not just reword the clue—add extra information that connects the clue to its broader context, regardless of the academic field.\n\nClue: \"{sentence}\"\nAnswer: \"{answer}\"\n",
