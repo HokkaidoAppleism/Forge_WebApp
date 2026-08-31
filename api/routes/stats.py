@@ -668,10 +668,23 @@ def buzz_spread():
     return jsonify({"bins": bins, "correct": correct, "wrong": wrong})
 
 
+
+# Both consumers only ever draw a 10-20 bin histogram and a median off this,
+# neither of which needs every row once there are thousands of them -- a
+# random sample this size is visually indistinguishable in a histogram and
+# accurate to well under a tenth of a second in the median, for either
+# consumer's purposes. Left generous on purpose: this is a payload-size cap
+# for the small fraction of accounts with tens of thousands of recorded
+# buzzes, not a real sample-size restriction on anyone else -- an account
+# under this stays completely unaffected.
+_SUBMISSION_TIME_SAMPLE_CAP = 4000
+
+
 @bp.get("/submission-time")
 @require_user
 def submission_time():
-    """Every recorded submission time, in seconds, split by right vs. wrong.
+    """Every recorded submission time, in seconds, split by right vs. wrong
+    (capped at _SUBMISSION_TIME_SAMPLE_CAP -- see its own comment).
 
     Sent as two raw lists rather than pre-binned: the desktop's histogram
     (`ax.hist(..., bins=20)`) picks its own bin edges from whatever range the
@@ -688,8 +701,10 @@ def submission_time():
             f"""select submission_time_ms, (outcome in ('power', 'ten')) as correct
                   from public.user_stats
                  where user_id = %s and submission_time_ms is not null
-                   and outcome in ('power', 'ten', 'neg') {clause}""",
-            [g.user_id] + params).fetchall()
+                   and outcome in ('power', 'ten', 'neg') {clause}
+              order by random()
+                 limit %s""",
+            [g.user_id] + params + [_SUBMISSION_TIME_SAMPLE_CAP]).fetchall()
 
     correct_times = [r["submission_time_ms"] / 1000.0 for r in rows if r["correct"]]
     incorrect_times = [r["submission_time_ms"] / 1000.0 for r in rows if not r["correct"]]

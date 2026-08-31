@@ -112,46 +112,68 @@ def cached_labels(conn, pairs):
     return {(r["subcategory"], int(r["cluster_id"])): r["label"] for r in rows}
 
 
-def representative_examples(conn, pairs):
-    """{(subcategory, cluster_id): [answer, ...]} for every pair, in one query.
+# {(subcategory, cluster_id): [representative answer, ...]}, cached per
+# process -- same reasoning, same safety, as stats.py's `_tier_labels`: this
+# is derived purely from the shared, read-only `questions` table, so it is
+# identical for every user and only changes when the question bank is
+# replaced. It matters more here than there: `knowledge_depth()` calls this
+# with every cluster that has no *AI-named* label yet, which for any player
+# without a Gemini key is every cluster, on every single request -- a player
+# with 3 subcategories worth of clusters was re-sampling ~14,400 answer rows
+# from Supabase and re-scoring them in Python (`representative`, above) on
+# every Knowledge Depth open the AI naming path never got a chance to skip.
+_representative_cache = {}
 
-    The window function is what makes this one round trip instead of one per
-    cluster: `row_number()` partitioned by cluster caps each group at
-    SAMPLE_PER_CLUSTER rows, so a dozen clusters costs one indexed scan rather
-    than a dozen. Ordered by `rand_key` so the sample spreads through the
-    cluster rather than favouring whichever rows were inserted first.
+
+def representative_examples(conn, pairs):
+    """{(subcategory, cluster_id): [answer, ...]} for every pair.
+
+    Answered from `_representative_cache` first; only the pairs not already
+    cached cost a query, and it is one query for all of them regardless of
+    how many that is -- the window function is what makes this one round trip
+    instead of one per cluster: `row_number()` partitioned by cluster caps
+    each group at SAMPLE_PER_CLUSTER rows, so a dozen clusters costs one
+    indexed scan rather than a dozen. Ordered by `rand_key` so the sample
+    spreads through the cluster rather than favouring whichever rows were
+    inserted first.
 
     Returns already-scored representative answers (`representative`, above),
     not the raw sample -- callers never need the sample itself.
     """
     if not pairs:
         return {}
-    subcategories = [sub for sub, _ in pairs]
-    cluster_ids = [int(cid) for _, cid in pairs]
 
-    rows = conn.execute(
-        """with wanted as (
-               select * from unnest(%s::text[], %s::int[])
-                   as w(subcategory, cluster_id)
-           )
-           select subcategory, cluster_label, answer
-             from (select q.subcategory, q.cluster_label, q.answer,
-                          row_number() over (
-                              partition by q.subcategory, q.cluster_label
-                              order by q.rand_key) as rn
-                     from public.questions q
-                     join wanted w
-                       on w.subcategory = q.subcategory
-                      and w.cluster_id  = q.cluster_label
-                    where q.answer is not null) sampled
-            where rn <= %s""",
-        (subcategories, cluster_ids, SAMPLE_PER_CLUSTER)).fetchall()
+    missing = [p for p in pairs if p not in _representative_cache]
+    if missing:
+        subcategories = [sub for sub, _ in missing]
+        cluster_ids = [int(cid) for _, cid in missing]
 
-    raw = {}
-    for row in rows:
-        raw.setdefault(
-            (row["subcategory"], row["cluster_label"]), []).append(row["answer"])
-    return {pair: representative(raw.get(pair, [])) for pair in pairs}
+        rows = conn.execute(
+            """with wanted as (
+                   select * from unnest(%s::text[], %s::int[])
+                       as w(subcategory, cluster_id)
+               )
+               select subcategory, cluster_label, answer
+                 from (select q.subcategory, q.cluster_label, q.answer,
+                              row_number() over (
+                                  partition by q.subcategory, q.cluster_label
+                                  order by q.rand_key) as rn
+                         from public.questions q
+                         join wanted w
+                           on w.subcategory = q.subcategory
+                          and w.cluster_id  = q.cluster_label
+                        where q.answer is not null) sampled
+                where rn <= %s""",
+            (subcategories, cluster_ids, SAMPLE_PER_CLUSTER)).fetchall()
+
+        raw = {}
+        for row in rows:
+            raw.setdefault(
+                (row["subcategory"], row["cluster_label"]), []).append(row["answer"])
+        for pair in missing:
+            _representative_cache[pair] = representative(raw.get(pair, []))
+
+    return {pair: _representative_cache[pair] for pair in pairs}
 
 
 def cache_names(conn, named):
