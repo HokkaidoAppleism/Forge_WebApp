@@ -1384,8 +1384,16 @@ export function initProfile(el) {
     // Not awaited: the panel actually asked for is already on screen, and the
     // rest of the picker is a "might click it later" bet, not something this
     // render should wait on.
+    // v.cacheKey ?? v.key here too, not just in the real loadPanel() above --
+    // this was still bare v.key, which meant the prefetch for buzzpoints/
+    // ceiling/negAutopsy (whose views share one cacheKey specifically so one
+    // fetch answers both tabs) wrote its warm entries under a key
+    // loadPanel() never reads, and fetched each of those panels' shared call
+    // *twice* in the background for no benefit -- a real regression, not a
+    // no-op: extra Railway round trips with nothing to show for them, and
+    // the panel still cache-misses on the first real click regardless.
     primeOtherPanels(visiblePanels(), current, cache,
-      (p, v) => v ? `${p.key}|${v.key}|${category}|${session?.sessionId ?? ''}`
+      (p, v) => v ? `${p.key}|${v.cacheKey ?? v.key}|${category}|${session?.sessionId ?? ''}`
                    : `${p.key}||${category}|${session?.sessionId ?? ''}`,
       (p, v) => (v ?? p).load(category, session?.sessionId))
   }
@@ -1675,8 +1683,9 @@ export function initSessionPanels(el) {
       return
     }
     // Not awaited -- see the profile picker's own copy of this call above.
+    // Same v.cacheKey ?? v.key fix as initProfile's own copy of this call.
     primeOtherPanels(panels, current, cache,
-      (p, v) => v ? `${p.key}|${v.key}|${sessionId}` : `${p.key}||${sessionId}`,
+      (p, v) => v ? `${p.key}|${v.cacheKey ?? v.key}|${sessionId}` : `${p.key}||${sessionId}`,
       (p, v) => (v ?? p).load('', sessionId))
   }
 
