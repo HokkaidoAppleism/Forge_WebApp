@@ -1,0 +1,32 @@
+-- The Ceiling panel's cold-start cost, which was landing on every single
+-- Railway redeploy.
+--
+-- routes/stats.py's `tier_labels()` runs one query, once per process (it's
+-- cached in a module-level dict, `_tier_labels`, that only exists in memory --
+-- reset on every deploy, every restart, every scale event):
+--
+--     select difficulty, series
+--       from (select difficulty,
+--                    regexp_replace(set_name, '^\s*(19|20)\d{2}\s+', '') as series,
+--                    row_number() over (partition by difficulty order by count(*) desc) as rank
+--               from public.questions
+--              where set_name is not null and difficulty is not null
+--           group by difficulty, series) ranked
+--      where rank <= 3
+--
+-- With nothing indexing (difficulty, set_name), that group by forces a
+-- sequential scan of all ~169,099 rows of `questions` -- and every row is
+-- wide (full question text, answer text), so this reads far more off disk
+-- than the two narrow columns it actually wants. Measured, per that
+-- function's own comment: ~10s cold, ~2s even with Postgres's page cache
+-- warm. Ceiling is the *only* panel that calls this, so it was the one panel
+-- that visibly lagged behind every other one on a freshly-restarted worker --
+-- and this session redeployed Railway many times in a row, so "cold" was the
+-- common case being tested, not the rare one.
+--
+-- A narrow covering index lets this become an index-only scan: Postgres reads
+-- (difficulty, set_name) directly off the index and never touches the wide
+-- row at all.
+create index if not exists questions_difficulty_setname_idx
+    on public.questions (difficulty, set_name)
+    where set_name is not null and difficulty is not null;
