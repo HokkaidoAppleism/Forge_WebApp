@@ -24,6 +24,7 @@ from flask_cors import CORS
 import adaptive
 import config
 import db
+from routes import questions as questions_routes
 from routes import stats as stats_routes
 from routes.adaptive import bp as adaptive_bp
 from routes.ai import bp as ai_bp
@@ -137,6 +138,17 @@ def _warm_catalogue():
     still computes each of these on demand exactly as it did before, so the
     worst case is the old behaviour rather than a broken endpoint.
 
+    `questions.filter_tree` is the same shape again, and the highest-traffic
+    of the four: it fills the reader's own category/subcategory boxes, so its
+    cold cost used to land on the *first sign-in* after a deploy, not a click
+    into some specific panel. It shares migration 0009's index with
+    `category_groups` above (both group on (category, subcategory)), so it
+    may already be answering quickly -- warmed here anyway, since a cold
+    first query beats no query even with an index behind it.
+    `questions.year_bounds` rides along; it is one min/max, cheap on its own,
+    but `/api/questions/filters` calls it right next to `filter_tree` and
+    there is no reason to leave one half of that route's own cost unwarmed.
+
     The real fix is an index for each -- (category, subcategory) already has
     one (supabase/migrations/0009_category_subcategory.sql), (difficulty,
     set_name) is migration 0011. Both stay useful after they land, because a
@@ -152,6 +164,13 @@ def _warm_catalogue():
         try:
             with db.content_tx() as conn:
                 stats_routes.tier_labels(conn)
+        except Exception:
+            traceback.print_exc()
+        try:
+            # Unlike the two above, these open their own connection each --
+            # no conn parameter to pass.
+            questions_routes.filter_tree()
+            questions_routes.year_bounds()
         except Exception:
             traceback.print_exc()
 
