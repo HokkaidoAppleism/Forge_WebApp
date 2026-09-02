@@ -24,6 +24,7 @@ from flask_cors import CORS
 import adaptive
 import config
 import db
+from routes import stats as stats_routes
 from routes.adaptive import bp as adaptive_bp
 from routes.ai import bp as ai_bp
 from routes.answers import bp as answers_bp
@@ -106,7 +107,8 @@ def create_app():
 
 
 def _warm_catalogue():
-    """Pay for Adaptive Learning's subject list at boot, not on a player's click.
+    """Pay for a few expensive, shared, read-only queries at boot, not on
+    whichever player's click happens to land first.
 
     `adaptive.category_groups` groups all ~185k question rows by
     (category, subcategory), and no index covers that pair -- Postgres sorts the
@@ -116,25 +118,40 @@ def _warm_catalogue():
     Adaptive Learning first after a deploy or a container wake, and they spend
     it looking at an empty subject picker.
 
-    Warming it here moves that cost to boot, where it overlaps with signing in
-    and loading the reader instead of landing on a click. `category_groups`
-    calls `cluster_counts` itself, so this fills both memos.
+    `stats.tier_labels` has the identical shape and was NOT warmed here
+    originally -- found only because Ceiling, the one panel that calls it,
+    kept lagging visibly behind every other stat panel across a session with
+    several redeploys in a row, each one resetting its memo. Same fix, same
+    reasoning: a sequential scan and sort of the whole `questions` table,
+    cached per process, landing on whoever opens Ceiling first instead of at
+    boot.
+
+    Warming both here moves that cost to boot, where it overlaps with signing
+    in and loading the reader instead of landing on a click. `category_groups`
+    calls `cluster_counts` itself, so this fills three memos off two calls.
 
     On a daemon thread rather than inline: the Procfile allows a worker 30
     seconds to boot, and blocking that long on a query whose connection the
     pool may not have established yet is how a slow database turns a boot into
     a crash loop. A failure here is logged and dropped -- the request path
-    still computes the catalogue on demand exactly as it did before, so the
+    still computes each of these on demand exactly as it did before, so the
     worst case is the old behaviour rather than a broken endpoint.
 
-    The real fix is an index on (category, subcategory); see
-    supabase/migrations/0009_category_subcategory.sql. This stays useful after
-    it lands, because a cold first query is still slower than no query.
+    The real fix is an index for each -- (category, subcategory) already has
+    one (supabase/migrations/0009_category_subcategory.sql), (difficulty,
+    set_name) is migration 0011. Both stay useful after they land, because a
+    cold first query is still slower than no query, and neither migration is
+    guaranteed to have been applied in every environment this boots in.
     """
     def warm():
         try:
             with db.content_tx() as conn:
                 adaptive.category_groups(conn)
+        except Exception:
+            traceback.print_exc()
+        try:
+            with db.content_tx() as conn:
+                stats_routes.tier_labels(conn)
         except Exception:
             traceback.print_exc()
 
