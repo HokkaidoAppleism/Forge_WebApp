@@ -31,6 +31,9 @@ categories that happen to mirror their own name, which made the feature look
 like it worked.
 """
 
+import threading
+import traceback
+
 from flask import Blueprint, g, jsonify, request
 
 import adaptive
@@ -402,31 +405,69 @@ def progress():
     return jsonify(panels.progress(rows, month))
 
 
+def _name_clusters_in_background(user_id, pairs, groups):
+    """Ask Gemini to name these clusters off the request path, and cache
+    whatever it comes back with for next time.
+
+    `knowledge_depth()` used to make this call inline -- the one place in
+    this whole API a third-party network call sat in the response path.
+    Every database fix elsewhere in this file is worth milliseconds; a
+    Gemini call is worth seconds, sometimes several, and it ran on every
+    single open of this panel for as long as any of the player's clusters
+    stayed unnamed. Deferred here instead: the panel already has its instant
+    fallback label (see FALLBACK_EXAMPLES) by the time this even starts, and
+    a real name lands in `cluster_labels` for every later visit -- by
+    anyone, it's a shared, permanent table, not scoped to this account --
+    once this finishes.
+
+    Fire-and-forget on a daemon thread. `cache_names`'s own
+    `on conflict do nothing` makes a retry (this account's next visit, or
+    someone else's landing first) safe to just try again, so nothing here
+    needs to be certain of finishing.
+    """
+    def name():
+        try:
+            with db.user_tx(user_id) as conn:
+                getter = ai.for_user(conn, user_id)
+            ai_named = getter.name_topic_clusters(groups) or {}
+            fresh = {}
+            for sub, cid in pairs:
+                label = str(ai_named.get(f"{sub}#{cid}") or "").strip()
+                if label:
+                    fresh[(sub, cid)] = label
+            if fresh:
+                with db.user_tx(user_id) as conn:
+                    clusters.cache_names(conn, fresh)
+        except ai.NoKeyConfigured:
+            pass    # nothing to name without a key -- not an error
+        except ai.AIError:
+            pass    # offline, quota, a bad reply -- the fallback already shown stands
+        except Exception:
+            traceback.print_exc()
+
+    threading.Thread(target=name, name="name-clusters", daemon=True).start()
+
+
 @bp.get("/knowledge-depth")
 @require_user
 def knowledge_depth():
     """Knowledge Depth: the recommender's own per-cluster skill, named.
 
-    The one panel with an AI call in it, and the one place that call cannot
-    simply 400 on `no_key` the way the four AI *features* do (routes/ai.py) --
-    the skill numbers underneath are real without a name attached to them, so
-    a player with no Gemini key still gets a working panel, just with
-    "Biology, Chemistry, Physics"-style example labels instead of a real
-    topic name. `panels.knowledge_depth`'s `namedByAi` tells the frontend
-    which kind it got.
-
-    Two transactions bracketing the one network call, same shape
-    `routes/ai.py` uses: read everything needed to decide what to ask Gemini,
-    make that one call with no transaction open, then a second short
-    transaction to cache whatever it named. Caching failure or no key at all
-    still returns a complete panel -- the names it manages to get are used,
-    the rest fall back, and the panel is never empty because of them.
+    Every player gets a working panel immediately -- a name attached to a
+    cluster is not required for the skill numbers underneath it to be real,
+    so an unnamed cluster's label is a few example answerlines joined
+    together (see `clusters.FALLBACK_EXAMPLES`) rather than a wait.
+    `panels.knowledge_depth`'s `namedByAi` tells the frontend which kind of
+    name a cluster actually got, so it can show that distinction if it wants
+    to; naming with AI happens after this response, not before it -- see
+    `_name_clusters_in_background`.
     """
     category = (request.args.get("category") or "").strip()
     scoped = category if category and category.lower() != "all" else None
+    user_id = g.user_id
 
-    with db.user_tx(g.user_id) as conn:
-        subjects = adaptive.cluster_skills(conn, g.user_id, scoped)
+    with db.user_tx(user_id) as conn:
+        subjects = adaptive.cluster_skills(conn, user_id, scoped)
         pairs = [(s["subcategory"], c["cluster"])
                  for s in subjects for c in s["clusters"]]
 
@@ -434,39 +475,23 @@ def knowledge_depth():
         missing = [p for p in pairs if p not in names]
         examples = clusters.representative_examples(conn, missing)
 
-        getter = None
-        if missing:
-            try:
-                getter = ai.for_user(conn, g.user_id)
-            except ai.NoKeyConfigured:
-                pass    # the panel still renders -- see the docstring above
+    for sub, cid in missing:
+        picked = examples.get((sub, cid)) or []
+        names[(sub, cid)] = (
+            ", ".join(picked[:clusters.FALLBACK_EXAMPLES]) if picked
+            else f"Topic {cid}")
 
     groups = [{"id": f"{sub}#{cid}", "answers": examples[(sub, cid)]}
               for (sub, cid) in missing if examples.get((sub, cid))]
-    ai_named = {}
-    if getter and groups:
-        try:
-            ai_named = getter.name_topic_clusters(groups) or {}
-        except ai.AIError:
-            pass        # offline, quota, a bad reply -- fallback labels below
+    if groups:
+        _name_clusters_in_background(
+            user_id, [p for p in missing if examples.get(p)], groups)
 
-    fresh = {}
-    for sub, cid in missing:
-        label = str(ai_named.get(f"{sub}#{cid}") or "").strip()
-        if label:
-            names[(sub, cid)] = label
-            fresh[(sub, cid)] = label
-        else:
-            picked = examples.get((sub, cid)) or []
-            names[(sub, cid)] = (
-                ", ".join(picked[:clusters.FALLBACK_EXAMPLES]) if picked
-                else f"Topic {cid}")
-
-    if fresh:
-        with db.user_tx(g.user_id) as conn:
-            clusters.cache_names(conn, fresh)
-
-    named_by_ai = len(fresh) == len(missing)
+    # Never true for a cluster named just now -- that naming hasn't happened
+    # yet by the time this response goes out. True only when every cluster
+    # this player has was already named by a *previous* visit's background
+    # pass (this one's or someone else's).
+    named_by_ai = len(missing) == 0
     shaped = [{
         "subcategory": s["subcategory"],
         "category": s["category"],
