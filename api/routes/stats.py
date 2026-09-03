@@ -405,20 +405,27 @@ def progress():
     return jsonify(panels.progress(rows, month))
 
 
-def _name_clusters_in_background(user_id, pairs, groups):
+def _name_clusters_in_background(user_id, pairs):
     """Ask Gemini to name these clusters off the request path, and cache
     whatever it comes back with for next time.
 
-    `knowledge_depth()` used to make this call inline -- the one place in
-    this whole API a third-party network call sat in the response path.
+    `knowledge_depth()` used to make the Gemini call inline -- the one place
+    in this whole API a third-party network call sat in the response path.
     Every database fix elsewhere in this file is worth milliseconds; a
     Gemini call is worth seconds, sometimes several, and it ran on every
     single open of this panel for as long as any of the player's clusters
-    stayed unnamed. Deferred here instead: the panel already has its instant
-    fallback label (see FALLBACK_EXAMPLES) by the time this even starts, and
-    a real name lands in `cluster_labels` for every later visit -- by
-    anyone, it's a shared, permanent table, not scoped to this account --
-    once this finishes.
+    stayed unnamed. Deferred here instead: the panel already has its instant,
+    cheaply-picked fallback label (`clusters.quick_examples`) by the time
+    this even starts, and a real name lands in `cluster_labels` for every
+    later visit -- by anyone, it's a shared, permanent table, not scoped to
+    this account -- once this finishes.
+
+    The *scored* examples Gemini actually wants (`clusters.representative_examples`,
+    the CPU-bound word-frequency pass) are fetched here too, not by the
+    caller -- that scoring only matters for what gets named the highest-
+    quality name, which is exactly the thing already deferred to this thread.
+    It shares its DB fetch with the caller's cheap pick via
+    `clusters._raw_examples_cache`, so this doesn't cost a second query.
 
     Fire-and-forget on a daemon thread. `cache_names`'s own
     `on conflict do nothing` makes a retry (this account's next visit, or
@@ -429,6 +436,11 @@ def _name_clusters_in_background(user_id, pairs, groups):
         try:
             with db.user_tx(user_id) as conn:
                 getter = ai.for_user(conn, user_id)
+                examples = clusters.representative_examples(conn, pairs)
+            groups = [{"id": f"{sub}#{cid}", "answers": examples[(sub, cid)]}
+                      for sub, cid in pairs if examples.get((sub, cid))]
+            if not groups:
+                return
             ai_named = getter.name_topic_clusters(groups) or {}
             fresh = {}
             for sub, cid in pairs:
@@ -473,7 +485,11 @@ def knowledge_depth():
 
         names = clusters.cached_labels(conn, pairs)
         missing = [p for p in pairs if p not in names]
-        examples = clusters.representative_examples(conn, missing)
+        # Cheap and unscored -- see clusters.quick_examples's own comment.
+        # The scored version Gemini actually wants is fetched by the
+        # background pass below, not here; this request never pays for that
+        # ranking, only for a few distinct examples to join into a label.
+        examples = clusters.quick_examples(conn, missing)
 
     for sub, cid in missing:
         picked = examples.get((sub, cid)) or []
@@ -481,11 +497,8 @@ def knowledge_depth():
             ", ".join(picked[:clusters.FALLBACK_EXAMPLES]) if picked
             else f"Topic {cid}")
 
-    groups = [{"id": f"{sub}#{cid}", "answers": examples[(sub, cid)]}
-              for (sub, cid) in missing if examples.get((sub, cid))]
-    if groups:
-        _name_clusters_in_background(
-            user_id, [p for p in missing if examples.get(p)], groups)
+    if missing:
+        _name_clusters_in_background(user_id, missing)
 
     # Never true for a cluster named just now -- that naming hasn't happened
     # yet by the time this response goes out. True only when every cluster

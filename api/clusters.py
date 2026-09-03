@@ -120,15 +120,27 @@ def cached_labels(conn, pairs):
 # with every cluster that has no *AI-named* label yet, which for any player
 # without a Gemini key is every cluster, on every single request -- a player
 # with 3 subcategories worth of clusters was re-sampling ~14,400 answer rows
-# from Supabase and re-scoring them in Python (`representative`, above) on
-# every Knowledge Depth open the AI naming path never got a chance to skip.
-_representative_cache = {}
+# from Supabase on every Knowledge Depth open the AI naming path never got a
+# chance to skip.
+#
+# Holds the *raw* sample, not the scored one -- see the split below. Scoring
+# (`representative`, below) is CPU-bound and was, it turned out, the second
+# half of the same bug: knowledge_depth() used to make a live Gemini call for
+# every uncached cluster (fixed separately, see routes/stats.py), but even
+# after deferring that call to a background thread, this module was still
+# running the full word-frequency scoring pass synchronously for every one of
+# those clusters just to build an instant fallback label -- for a player with
+# many unnamed clusters (no key configured, or a just-reset cache after a
+# deploy) that's real, request-blocking CPU time the scoring was never meant
+# to cost in the first place, since a fallback label only needs *some*
+# distinct examples, not the best-scored ones.
+_raw_examples_cache = {}
 
 
-def representative_examples(conn, pairs):
-    """{(subcategory, cluster_id): [answer, ...]} for every pair.
+def _raw_examples(conn, pairs):
+    """{(subcategory, cluster_id): [answer, ...]}, unscored, for every pair.
 
-    Answered from `_representative_cache` first; only the pairs not already
+    Answered from `_raw_examples_cache` first; only the pairs not already
     cached cost a query, and it is one query for all of them regardless of
     how many that is -- the window function is what makes this one round trip
     instead of one per cluster: `row_number()` partitioned by cluster caps
@@ -136,14 +148,11 @@ def representative_examples(conn, pairs):
     indexed scan rather than a dozen. Ordered by `rand_key` so the sample
     spreads through the cluster rather than favouring whichever rows were
     inserted first.
-
-    Returns already-scored representative answers (`representative`, above),
-    not the raw sample -- callers never need the sample itself.
     """
     if not pairs:
         return {}
 
-    missing = [p for p in pairs if p not in _representative_cache]
+    missing = [p for p in pairs if p not in _raw_examples_cache]
     if missing:
         subcategories = [sub for sub, _ in missing]
         cluster_ids = [int(cid) for _, cid in missing]
@@ -171,9 +180,51 @@ def representative_examples(conn, pairs):
             raw.setdefault(
                 (row["subcategory"], row["cluster_label"]), []).append(row["answer"])
         for pair in missing:
-            _representative_cache[pair] = representative(raw.get(pair, []))
+            _raw_examples_cache[pair] = raw.get(pair, [])
 
-    return {pair: _representative_cache[pair] for pair in pairs}
+    return {pair: _raw_examples_cache[pair] for pair in pairs}
+
+
+def representative_examples(conn, pairs):
+    """{(subcategory, cluster_id): [answer, ...]}, scored (`representative`).
+
+    For the background naming pass only, where the quality of what gets
+    handed to Gemini actually matters. `knowledge_depth()`'s synchronous,
+    instant-fallback path uses `quick_examples` instead -- see its own
+    comment for why the scoring pass doesn't belong on that path.
+    """
+    raw = _raw_examples(conn, pairs)
+    return {pair: representative(raw[pair]) for pair in pairs}
+
+
+def quick_examples(conn, pairs):
+    """{(subcategory, cluster_id): [answer, ...]}, cheaply and unscored, for
+    knowledge_depth()'s instant fallback label.
+
+    Shares `_raw_examples_cache` with `representative_examples` -- whichever
+    of the two runs first for a given pair pays the one query both need, and
+    the other reuses it for free from cache. Only the *ranking* differs: this
+    skips `representative`'s word-frequency pass (a Counter build plus an
+    O(n^2) pairwise token-subset check per candidate) entirely, since a
+    fallback label just needs a few genuinely different examples, not the
+    single best-scored set -- the distinction only the AI-bound path in
+    `representative_examples` needs to care about.
+    """
+    raw = _raw_examples(conn, pairs)
+    return {pair: _quick_pick(raw[pair]) for pair in pairs}
+
+
+def _quick_pick(answers, want=FALLBACK_EXAMPLES):
+    """A handful of distinct answerlines, first-seen order, no scoring."""
+    seen, picked = set(), []
+    for answer in answers:
+        head = _head(answer)
+        if head and head not in seen:
+            seen.add(head)
+            picked.append(head)
+            if len(picked) >= want:
+                break
+    return picked
 
 
 def cache_names(conn, named):
